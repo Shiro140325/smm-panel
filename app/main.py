@@ -9,6 +9,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import Headers
@@ -42,6 +43,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="SMM Panel API", lifespan=lifespan)
+app.add_middleware(GZipMiddleware, minimum_size=1024)   # the full service list is a few MB
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[get_settings().frontend_origin],

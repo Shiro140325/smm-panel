@@ -5,9 +5,14 @@ export const API_BASE = "";
 
 export const PLATFORMS = {
   tiktok: "TikTok", facebook: "Facebook", instagram: "Instagram", youtube: "YouTube",
-  x: "X", telegram: "Telegram", whatsapp: "WhatsApp", spotify: "Spotify",
+  x: "X", telegram: "Telegram", whatsapp: "WhatsApp", spotify: "Spotify", threads: "Threads",
+  shopee: "Shopee", linkedin: "LinkedIn", kick: "Kick", twitch: "Twitch", snapchat: "Snapchat",
+  soundcloud: "SoundCloud", discord: "Discord", reddit: "Reddit", pinterest: "Pinterest", other: "Other",
 };
-export const PLATFORM_ORDER = ["tiktok", "facebook", "instagram", "youtube", "x", "telegram", "whatsapp", "spotify"];
+export const PLATFORM_ORDER = [
+  "tiktok", "facebook", "instagram", "youtube", "x", "telegram", "whatsapp", "spotify", "threads",
+  "shopee", "linkedin", "kick", "twitch", "snapchat", "soundcloud", "discord", "reddit", "pinterest", "other",
+];
 
 export class ApiError extends Error {
   constructor(message, status) { super(message); this.status = status; }
@@ -48,7 +53,7 @@ export function num(n) {
 /** Same rounding as the backend: ceil to the centavo, minimum ₱0.01. */
 export function orderCharge(per1k, qty) {
   if (!qty || qty <= 0) return 0;
-  return Math.max(Math.ceil((per1k * qty) / 1000 * 100) / 100, 0.01);
+  return Math.max(Math.ceil(Number(((per1k * qty) / 1000 * 100).toFixed(6))) / 100, 0.01);
 }
 
 export function esc(s) {

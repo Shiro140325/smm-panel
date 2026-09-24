@@ -17,7 +17,8 @@ app/
   config.py             env settings
   db.py                 engine, transaction helpers (handles Neon sslmode/pooler)
   security.py           argon2 passwords, JWT session cookie, balance
-  pricing.py            provider rate → PHP price with markup
+  catalog.py            full provider catalog → services (cleans names, skips reviews/votes/traffic)
+  pricing.py            provider rate → PHP price with markup (tiered when markup_pct is null)
   providers/smm_client.py   SMM API v2 client (status/refill in batches of 100)
   routers/
     auth.py             /auth/register, /auth/login, /auth/logout, /auth/me
@@ -33,6 +34,17 @@ scripts/
   ph_services.py        list PH-targeted services across providers → CSV
   refill_test.py        manual refill test against a provider
 ```
+
+## Catalog
+
+- Every 6 hours the sync pulls the provider's service list, then `app/catalog.py` imports it
+  as `auto` rows: cleaned name, platform, category (Followers, Likes, Views…), tier, refill.
+- Skipped on purpose: reviews/ratings, poll votes, website traffic, monetisation/watch-time,
+  app subscriptions, separator and "not for you" rows, and non-standard order types (packages etc.).
+- Tier: `HQ` only when the provider actually offers refills for it, `PH` for Philippine-targeted, else `Basic`.
+  A refill promised in the name but not offered by the provider API counts as no refill.
+- Hand-picked rows (`auto = false`) are never overwritten; they show first as "Recommended".
+- Price: `markup_pct` null → 300% under $0.05/1K, 150% under $0.50/1K, 60% above. Set a number to fix it.
 
 ## Money rules
 

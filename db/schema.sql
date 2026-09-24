@@ -68,7 +68,8 @@ create table if not exists services (
   id                  serial primary key,
   provider_id         int not null references providers(id),
   provider_service_id bigint not null,
-  platform            text not null,          -- tiktok | facebook | instagram | youtube | x | ...
+  platform            text not null,          -- tiktok | facebook | instagram | youtube | x | ... | other
+  category            text,                   -- Followers | Likes | Views | ... (site name for "other")
   name                text not null,          -- e.g. "TikTok Followers"
   tier                text not null,          -- Basic | HQ | Real · PH
   description         text,
@@ -76,11 +77,20 @@ create table if not exists services (
   speed               text,                   -- "Up to 5K / day"
   drop_risk           text,                   -- Low | Moderate | High
   refill_days         integer not null default 0,   -- 0 = no refill
-  markup_pct          numeric(6,2) not null default 60,
+  markup_pct          numeric(6,2),           -- null = tiered by provider rate (see app/pricing.py)
+  auto                boolean not null default false,   -- true = imported by app/catalog.py
   active              boolean not null default true,
   sort                integer not null default 0,
   foreign key (provider_id, provider_service_id) references provider_services (provider_id, provider_service_id)
 );
+
+-- upgrades for databases created before the full-catalog import
+alter table services add column if not exists category text;
+alter table services add column if not exists auto boolean not null default false;
+alter table services alter column markup_pct drop not null;
+alter table services alter column markup_pct drop default;
+create unique index if not exists services_auto_psid on services (provider_id, provider_service_id) where auto;
+create index if not exists services_active on services (platform, sort, id) where active;
 
 create table if not exists orders (
   id                bigserial primary key,

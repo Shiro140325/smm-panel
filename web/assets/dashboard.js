@@ -11,6 +11,7 @@ const state = {
   services: [],
   // new-order form
   platform: null,
+  category: null,
   serviceId: null,
   search: "",
   link: "",
@@ -87,11 +88,40 @@ window.addEventListener("hashchange", render);
 
 const selectedService = () => state.services.find((s) => s.id === state.serviceId) || null;
 
+const LIST_LIMIT = 80;              // rows rendered at once; search narrows the rest
+const RECOMMENDED = "__featured";
+
+/** Every word of the query must appear in the service's id, name, description, tier or category. */
+function matches(s, q) {
+  if (!q) return true;
+  const hay = `${s.id} ${s.name} ${s.description || ""} ${s.tier} ${s.category || ""}`.toLowerCase();
+  return q.split(/\s+/).every((w) => hay.includes(w));
+}
+
+function categoriesFor(platform) {
+  const counts = new Map();
+  let featured = 0;
+  for (const s of state.services) {
+    if (s.platform !== platform) continue;
+    if (s.featured) featured++;
+    const c = s.category || "Other";
+    counts.set(c, (counts.get(c) || 0) + 1);
+  }
+  const cats = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  return featured ? [[RECOMMENDED, featured], ...cats] : cats;
+}
+
+const categoryLabel = (c) => (c === RECOMMENDED ? "Recommended" : c);
+
 function servicesForPlatform() {
   const q = state.search.trim().toLowerCase();
-  return state.services.filter(
-    (s) => s.platform === state.platform && (!q || `${s.name} ${s.tier}`.toLowerCase().includes(q)),
-  );
+  return state.services.filter((s) => s.platform === state.platform && (q
+    ? matches(s, q)   // searching looks across every category
+    : state.category === RECOMMENDED ? s.featured : (s.category || "Other") === state.category));
+}
+
+function svcSub(s) {
+  return [s.description, s.start_time, refillText(s.refill_days)].filter(Boolean).map(esc).join(" · ");
 }
 
 function orderQty(svc) {
@@ -145,7 +175,10 @@ function renderNew() {
   }
   const platforms = PLATFORM_ORDER.filter((p) => state.services.some((s) => s.platform === p));
   if (!platforms.includes(state.platform)) state.platform = platforms[0];
+  const cats = categoriesFor(state.platform);
+  if (!cats.some(([c]) => c === state.category)) state.category = cats[0]?.[0] ?? null;
   const list = servicesForPlatform();
+  const shown = list.slice(0, LIST_LIMIT);
   if (!selectedService() || selectedService().platform !== state.platform) state.serviceId = list[0]?.id ?? null;
   const svc = selectedService();
 
@@ -160,16 +193,25 @@ function renderNew() {
           </div>
         </div>
         <div class="field">
+          <label for="svc-cat">Category</label>
+          <select class="input select" id="svc-cat" ${state.search.trim() ? "disabled" : ""}>
+            ${cats.map(([c, n]) => `<option value="${esc(c)}" ${c === state.category ? "selected" : ""}>${esc(categoryLabel(c))} (${num(n)})</option>`).join("")}
+          </select>
+        </div>
+        <div class="field">
           <label for="svc-search">Service</label>
-          <input class="input" id="svc-search" type="search" placeholder="Search ${esc(PLATFORMS[state.platform] || "")} services" value="${esc(state.search)}">
+          <input class="input" id="svc-search" type="search" placeholder="Search all ${esc(PLATFORMS[state.platform] || "")} services" value="${esc(state.search)}">
           <div class="svc-list" id="svc-list" role="group" aria-label="Services">
-            ${list.length ? list.map((s) => `
+            ${shown.length ? shown.map((s) => `
               <button type="button" class="svc-option" data-svc="${s.id}" aria-pressed="${s.id === state.serviceId}">
-                <span class="grow"><span class="t">${esc(s.name)}</span><span class="s"><span class="mono">ID ${s.id}</span> · ${esc(s.start_time || "")}${s.start_time ? " · " : ""}${refillText(s.refill_days)}</span></span>
+                <span class="grow"><span class="t">${esc(s.name)}</span><span class="s"><span class="mono">ID ${s.id}</span>${svcSub(s) ? ` · ${svcSub(s)}` : ""}</span></span>
                 ${tierBadge(s.tier)}
                 <span class="p">${peso(s.price_per_1k_php)}<span class="muted" style="font-weight:500"> /1K</span></span>
               </button>`).join("") : `<div class="empty">No services match "${esc(state.search)}".</div>`}
           </div>
+          <span class="hint">${list.length > shown.length
+            ? `Showing ${num(shown.length)} of ${num(list.length)}, cheapest first. Search to find the rest.`
+            : state.search.trim() ? `${num(list.length)} match${list.length === 1 ? "" : "es"} across all categories.` : ""}</span>
         </div>
         <div class="field">
           <label for="link">Link</label>
@@ -218,12 +260,19 @@ function renderNew() {
     </div>`;
 
   view.querySelectorAll("[data-platform]").forEach((b) =>
-    b.addEventListener("click", () => { state.platform = b.dataset.platform; state.search = ""; state.serviceId = null; renderNew(); }));
+    b.addEventListener("click", () => { state.platform = b.dataset.platform; state.search = ""; state.category = null; state.serviceId = null; renderNew(); }));
+  document.getElementById("svc-cat").addEventListener("change", (e) => {
+    state.category = e.target.value;
+    state.serviceId = servicesForPlatform()[0]?.id ?? null;
+    renderNew();
+  });
   view.querySelectorAll("[data-svc]").forEach((b) =>
     b.addEventListener("click", () => { state.serviceId = Number(b.dataset.svc); renderNew(); }));
   const search = document.getElementById("svc-search");
   search.addEventListener("input", () => {
     state.search = search.value;
+    const hits = servicesForPlatform();
+    if (hits.length && !hits.some((x) => x.id === state.serviceId)) state.serviceId = hits[0].id;
     const pos = search.selectionStart;
     renderNew();
     const s2 = document.getElementById("svc-search");
@@ -327,14 +376,16 @@ function renderIdList() {
   const el = document.getElementById("id-list");
   if (!el) return;
   const q = state.idSearch.trim().toLowerCase();
-  const list = state.services.filter((s) => s.platform === state.idPlatform
-    && (!q || `${s.id} ${s.name} ${s.tier}`.toLowerCase().includes(q)));
-  el.innerHTML = list.length ? list.map((s) => `
+  const list = state.services.filter((s) => s.platform === state.idPlatform && matches(s, q));
+  const shown = list.slice(0, LIST_LIMIT);
+  el.innerHTML = (shown.length ? shown.map((s) => `
     <button type="button" class="id-row" data-add="${s.id}" title="Add a line for service ${s.id}">
       <span class="id">${s.id}</span>
-      <span class="n">${esc(s.name)} ${tierBadge(s.tier)}${s.custom_comments ? ` <span class="hint">(New order only)</span>` : ""}</span>
+      <span class="n">${esc(s.name)} ${tierBadge(s.tier)}${s.custom_comments ? ` <span class="hint">(New order only)</span>` : ""}
+        ${s.description || s.category ? `<span class="d">${esc([s.category, s.description].filter(Boolean).join(" · "))}</span>` : ""}</span>
       <span class="p">${peso(s.price_per_1k_php)}</span>
-    </button>`).join("") : `<p class="hint" style="padding:8px 6px">No matches.</p>`;
+    </button>`).join("") : `<p class="hint" style="padding:8px 6px">No matches.</p>`)
+    + (list.length > shown.length ? `<p class="hint" style="padding:8px 6px">Showing ${num(shown.length)} of ${num(list.length)}. Search to narrow it down.</p>` : "");
   el.querySelectorAll("[data-add]").forEach((b) => b.addEventListener("click", () => {
     const ta = document.getElementById("mass-input");
     const prefix = ta.value && !ta.value.endsWith("\n") ? "\n" : "";

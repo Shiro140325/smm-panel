@@ -67,7 +67,7 @@ function renderHero() {
 
 (async () => {
   try {
-    services = await api("/services");
+    services = await api("/services?featured=1");
   } catch (e) {
     document.getElementById("price-body").innerHTML = `<tr><td colspan="6" class="muted">Couldn't load prices right now.</td></tr>`;
     document.getElementById("hero-card").innerHTML = "";

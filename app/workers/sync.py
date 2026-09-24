@@ -8,6 +8,7 @@ import logging
 import time
 
 from app import fx
+from app.catalog import import_catalog
 from app.config import get_settings
 from app.db import transaction
 from app.payments import reconcile_pending_topups
@@ -205,6 +206,10 @@ async def run_sync_once() -> None:
                 log.info("%s catalog: %d services", p["name"], n)
             except Exception:
                 log.exception("%s catalog sync failed", p["name"])
+            try:
+                await import_catalog(p["id"])
+            except Exception:
+                log.exception("%s catalog import failed", p["name"])
     try:
         await flag_stuck_orders()
     except Exception:

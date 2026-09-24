@@ -52,10 +52,28 @@ async def main():
     await run_sync_once()
     ps = await sql("select provider_service_id, rate, refill from provider_services order by 1")
     check("catalog synced", len(ps) == 3, ps)
+    auto = await sql("select provider_service_id, platform, category, tier, refill_days, markup_pct, active "
+                     "from services where auto order by provider_service_id")
+    check("full catalog auto-imported (platform, category, tier, refill)",
+          [(a["platform"], a["category"], a["tier"], a["refill_days"]) for a in auto]
+          == [("tiktok", "Followers", "Basic", 0), ("tiktok", "Followers", "HQ", 30), ("instagram", "Comments", "Basic", 0)]
+          and all(a["markup_pct"] is None and a["active"] for a in auto), auto)
+    r = httpx.get(f"{API}/services")
+    # tiered markup: $0.50 → 60% (not under $0.50), $1.20 → 60%, $1.00 → 60%
+    check("auto services priced with tiered markup", sorted(s["price_per_1k_php"] for s in r.json()) == [46.4, 92.8, 111.36], r.text)
+    check("featured list excludes auto rows", httpx.get(f"{API}/services?featured=1").json() == [])
+    # the rest of this test uses hand-picked services with ids 1..3
+    await sql("delete from services where auto")
+    await sql("alter sequence services_id_seq restart with 1")
     await sql("""insert into services (provider_id, provider_service_id, platform, name, tier, refill_days, markup_pct)
                  values (1, 1, 'tiktok', 'TikTok Followers', 'Basic', 0, 80),
                         (1, 2, 'tiktok', 'TikTok Followers', 'HQ', 30, 60),
                         (1, 3, 'instagram', 'Instagram Custom Comments', 'Basic', 0, 60)""")
+    from app.catalog import import_catalog
+    res = await import_catalog(1)
+    check("import skips services that have a hand-picked row", res["imported"] == 0 and res["added"] == 0, res)
+    cats = await sql("select id, category from services order by id")
+    check("hand-picked rows get a category", [c["category"] for c in cats] == ["Followers", "Followers", "Comments"], cats)
 
     c = httpx.AsyncClient(base_url=API)
     r = await c.get("/services")
