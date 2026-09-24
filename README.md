@@ -41,7 +41,8 @@ scripts/
   as `auto` rows: cleaned name, platform, category (Followers, Likes, Views…), tier, refill.
 - Skipped on purpose: reviews/ratings, poll votes, website traffic, monetisation/watch-time,
   app subscriptions, separator and "not for you" rows, and non-standard order types (packages etc.).
-- Tier: `HQ` only when the provider actually offers refills for it, `PH` for Philippine-targeted, else `Basic`.
+- Tier: `PH` for Philippine-targeted, `Non-drop` when the provider's name says non/no drop (drop risk "Lowest"),
+  `HQ` only when the provider actually offers refills for it, else `Basic`.
   A refill promised in the name but not offered by the provider API counts as no refill.
 - Hand-picked rows (`auto = false`) are never overwritten; they show first as "Recommended".
 - Price: `markup_pct` null → 300% under $0.05/1K, 150% under $0.50/1K, 60% above. Set a number to fix it.

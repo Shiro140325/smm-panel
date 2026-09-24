@@ -71,7 +71,7 @@ create table if not exists services (
   platform            text not null,          -- tiktok | facebook | instagram | youtube | x | ... | other
   category            text,                   -- Followers | Likes | Views | ... (site name for "other")
   name                text not null,          -- e.g. "TikTok Followers"
-  tier                text not null,          -- Basic | HQ | Real · PH
+  tier                text not null,          -- Basic | HQ | Non-drop | PH | Real · PH
   description         text,
   start_time          text,                   -- "0–6 hrs"
   speed               text,                   -- "Up to 5K / day"

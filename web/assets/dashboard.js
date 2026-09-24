@@ -1,5 +1,5 @@
 import {
-  api, esc, fmtDate, initTheme, num, orderCharge, peso, PLATFORMS, PLATFORM_ORDER, refillText, serviceBadges, tierBadge, toast,
+  api, esc, fmtDate, initTheme, num, orderCharge, peso, PLATFORMS, PLATFORM_ORDER, refillText, tierBadge, toast,
 } from "./common.js";
 import { icons } from "./icons.js";
 
@@ -191,7 +191,7 @@ function svcOptionsHTML(shown) {
   return shown.length ? shown.map((s) => `
     <button type="button" class="svc-option" data-svc="${s.id}" aria-pressed="${s.id === state.serviceId}">
       <span class="grow"><span class="t">${esc(s.name)}</span><span class="s"><span class="mono">ID ${s.id}</span>${svcSub(s) ? ` · ${svcSub(s)}` : ""}</span></span>
-      ${serviceBadges(s)}
+      ${tierBadge(s.tier)}
       <span class="p">${peso(s.price_per_1k_php)}<span class="muted" style="font-weight:500"> /1K</span></span>
     </button>`).join("") : `<div class="empty">No services match "${esc(state.search)}".</div>`;
 }
@@ -274,7 +274,7 @@ function renderNew() {
       <div class="aside">
         ${svc ? `
         <div class="card details">
-          <div style="display:flex;align-items:center;gap:10px"><h3>${esc(svc.name)}</h3>${serviceBadges(svc)}</div>
+          <div style="display:flex;align-items:center;gap:10px"><h3>${esc(svc.name)}</h3>${tierBadge(svc.tier)}</div>
           ${svc.description ? `<p style="color:var(--ink-2);font-size:15px">${esc(svc.description)}</p>` : ""}
           <div class="kv">
             <div><span class="k">Service ID</span><span class="v mono">${svc.id}</span></div>
@@ -384,7 +384,7 @@ function updateMass() {
   document.getElementById("mass-preview").classList.toggle("hidden", !rows.length);
   tbody.innerHTML = rows.map((r) => `<tr class="${r.error ? "bad" : ""}">
       <td class="mono muted">${r.line}</td>
-      <td>${r.svc ? `<span style="font-weight:600">${esc(r.svc.name)}</span> ${serviceBadges(r.svc)}` : `<span class="muted">Unknown service</span>`}
+      <td>${r.svc ? `<span style="font-weight:600">${esc(r.svc.name)}</span> ${tierBadge(r.svc.tier)}` : `<span class="muted">Unknown service</span>`}
         <div class="link">${esc(r.link || r.raw)}</div></td>
       <td class="num">${r.quantity && !Number.isNaN(r.quantity) ? num(r.quantity) : "–"}</td>
       <td class="num">${r.error ? "–" : `<strong>${peso(r.charge)}</strong>`}</td>
@@ -415,7 +415,7 @@ function renderIdList() {
   el.innerHTML = (shown.length ? shown.map((s) => `
     <button type="button" class="id-row" data-add="${s.id}" title="Add a line for service ${s.id}">
       <span class="id">${s.id}</span>
-      <span class="n">${esc(s.name)} ${serviceBadges(s)}${s.custom_comments ? ` <span class="hint">(New order only)</span>` : ""}
+      <span class="n">${esc(s.name)} ${tierBadge(s.tier)}${s.custom_comments ? ` <span class="hint">(New order only)</span>` : ""}
         ${s.description || s.category ? `<span class="d">${esc([s.category, s.description].filter(Boolean).join(" · "))}</span>` : ""}</span>
       <span class="p">${peso(s.price_per_1k_php)}</span>
     </button>`).join("") : `<p class="hint" style="padding:8px 6px">No matches.</p>`)

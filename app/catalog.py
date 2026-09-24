@@ -83,6 +83,9 @@ KINDS = [
     ("Views", r"\bviews?\b|\bviewers?\b|impression|\breach\b|\bvisits?\b"),
 ]
 
+# the provider's own "non drop" / "no drop" claim (test on NFKC text: names use fancy fonts)
+NON_DROP = re.compile(r"\b(non|no)[ -]?drop", re.I)
+
 PH = re.compile(r"phil+ip+in|filipin|pinoy|\bph\b|\U0001F1F5\U0001F1ED", re.I)
 
 # flags and decorative symbols; other emoji are kept because they tell reaction services apart
@@ -214,8 +217,11 @@ def classify(svc: dict):
         title = f"{title} (custom)"
     api_refill = bool(svc.get("refill"))
     days = refill_days(raw_name, api_refill)
+    non_drop = bool(NON_DROP.search(name))
     if PH.search(both) and not re.search(r"pakistan|\bpk\b", both, re.I):
         tier = "PH"
+    elif non_drop:
+        tier = "Non-drop"
     elif api_refill:
         tier = "HQ"
     else:
@@ -229,7 +235,7 @@ def classify(svc: dict):
         "description": desc,
         "start_time": start,
         "speed": speed,
-        "drop_risk": "Moderate" if api_refill else "High",
+        "drop_risk": "Lowest" if non_drop else "Moderate" if api_refill else "High",
         "refill_days": days,
     }
 

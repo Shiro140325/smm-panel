@@ -60,15 +60,10 @@ export function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-/** Tier plus the provider's non-drop claim, which is separate from refill (the tier says whether refill exists). */
-export function serviceBadges(s) {
-  const nd = s.non_drop ? ` <span class="badge badge-nd" title="The provider says this service shouldn't drop">Non-drop</span>` : "";
-  return `<span class="badges">${tierBadge(s.tier)}${nd}</span>`;
-}
 
 export function tierBadge(tier) {
   const t = String(tier || "");
-  const cls = /ph/i.test(t) ? "badge-ph" : /hq/i.test(t) ? "badge-hq" : "badge-basic";
+  const cls = /non-drop/i.test(t) ? "badge-nd" : /ph/i.test(t) ? "badge-ph" : /hq/i.test(t) ? "badge-hq" : "badge-basic";
   return `<span class="badge ${cls}">${esc(t)}</span>`;
 }
 

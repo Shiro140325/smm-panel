@@ -107,7 +107,7 @@ async def main():
         ph_opt = await pg.eval_on_selector_all("#svc-cat option", "els => els.map(e => [e.value, e.textContent])")
         check("Philippines category on Facebook", any(v == "__ph" and t.startswith("Philippines") for v, t in ph_opt), ph_opt)
         await pg.select_option("#svc-cat", "__ph")
-        tiers = await pg.eval_on_selector_all("#svc-list .svc-option .badges .badge:first-child", "els => els.map(e => e.textContent)")
+        tiers = await pg.eval_on_selector_all("#svc-list .svc-option .badge", "els => els.map(e => e.textContent)")
         n_ph = int(psql("select count(*) from services where active and platform='facebook' and tier ~ '\\mPH\\M'"))
         check("Philippines lists every PH service and nothing else", len(tiers) == n_ph and all("PH" in t for t in tiers), (n_ph, tiers))
         await pg.click('[data-platform="telegram"]')
@@ -117,11 +117,11 @@ async def main():
         # Non-drop: the provider's own non-drop claim, as a cross-category view
         await pg.click('[data-platform="instagram"]')
         await pg.select_option("#svc-cat", "__nondrop")
-        subs = await pg.eval_on_selector_all("#svc-list .svc-option", "els => els.map(e => [e.querySelector('.badge-nd')?.textContent || '', e.querySelector('.badges .badge').textContent])")
+        tiers = await pg.eval_on_selector_all("#svc-list .svc-option .badge", "els => els.map(e => e.textContent)")
         n_nd = int(psql("select count(*) from services s join provider_services ps using (provider_id, provider_service_id) "
                         "where s.active and s.platform='instagram' and normalize(ps.name, NFKC) ~* '(non|no)[ -]?drop'"))
-        check("Non-drop lists every non-drop service and nothing else", n_nd > 0 and len(subs) == min(n_nd, 80)
-              and all(nd == "Non-drop" and tier in ("Basic", "HQ", "PH", "Real · PH") for nd, tier in subs), (n_nd, subs[:3]))
+        check("Non-drop lists every non-drop service, tiered Non-drop (or PH)", n_nd > 0 and len(tiers) == min(n_nd, 80)
+              and all(x in ("Non-drop", "PH", "Real · PH") for x in tiers) and "Non-drop" in tiers, (n_nd, tiers[:3]))
         await pg.click('[data-platform="discord"]')
         opts = await pg.eval_on_selector_all("#svc-cat option", "els => els.map(e => e.value)")
         check("no Non-drop category where there are none", "__nondrop" not in opts, opts)

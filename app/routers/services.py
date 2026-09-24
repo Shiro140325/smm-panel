@@ -1,10 +1,10 @@
 import os
-import re
 import time
 import unicodedata
 
 from fastapi import APIRouter, Depends
 
+from app.catalog import NON_DROP
 from app.db import DB, get_db
 from app.pricing import SERVICE_SELECT, price_per_1k_php
 
@@ -13,9 +13,6 @@ router = APIRouter(prefix="/services", tags=["services"])
 # The full catalog is thousands of rows; cache the priced list briefly per query shape.
 _CACHE_TTL = float(os.environ.get("SERVICES_CACHE_SECONDS", "60"))
 _cache: dict[tuple, tuple[float, list]] = {}
-
-# the provider's own "non drop" / "no drop" claim; our cleaned names drop that segment
-_NON_DROP = re.compile(r"\b(non|no)[ -]?drop", re.I)
 
 
 def _row(r) -> dict:
@@ -31,7 +28,7 @@ def _row(r) -> dict:
         "speed": r["speed"],
         "drop_risk": r["drop_risk"],
         "refill_days": r["refill_days"],
-        "non_drop": bool(_NON_DROP.search(unicodedata.normalize("NFKC", r["provider_name"] or ""))),
+        "non_drop": bool(NON_DROP.search(unicodedata.normalize("NFKC", r["provider_name"] or ""))),
         # frontend: show a comments textarea (one per line) instead of a quantity field
         "custom_comments": (r["type"] or "").strip().lower() == "custom comments",
         "min": r["min_qty"],

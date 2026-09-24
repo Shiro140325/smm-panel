@@ -132,8 +132,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .badge-hq { background: var(--accent-soft); color: var(--accent-soft-ink); }
 .badge-ph { background: var(--ok-bg); color: var(--ok); }
 .badge-nd { background: transparent; color: var(--ink-2); box-shadow: inset 0 0 0 1px var(--line); }
-.badges { display: inline-flex; flex-wrap: wrap; gap: 4px; }
-.svc-option .badges { flex-direction: column; align-items: flex-end; }
 .badge-pending { background: var(--neutral-bg); color: var(--ink-2); }
 .badge-progress { background: var(--accent-soft); color: var(--accent-soft-ink); }
 .badge-completed { background: var(--ok-bg); color: var(--ok); }
