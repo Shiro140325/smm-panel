@@ -100,6 +100,18 @@ async def main():
         opts = await pg.eval_on_selector_all("#svc-cat option", "els => els.map(e => e.textContent)")
         check("Other platform lists sites as categories", any(o.startswith("VK") for o in opts), opts)
 
+        # Philippines: a cross-category view of PH-tier services, only where there are any
+        await pg.click('[data-platform="facebook"]')
+        ph_opt = await pg.eval_on_selector_all("#svc-cat option", "els => els.map(e => [e.value, e.textContent])")
+        check("Philippines category on Facebook", any(v == "__ph" and t.startswith("Philippines") for v, t in ph_opt), ph_opt)
+        await pg.select_option("#svc-cat", "__ph")
+        tiers = await pg.eval_on_selector_all("#svc-list .svc-option .badge", "els => els.map(e => e.textContent)")
+        n_ph = int(psql("select count(*) from services where active and platform='facebook' and tier ~ '\\mPH\\M'"))
+        check("Philippines lists every PH service and nothing else", len(tiers) == n_ph and all("PH" in t for t in tiers), (n_ph, tiers))
+        await pg.click('[data-platform="telegram"]')
+        opts = await pg.eval_on_selector_all("#svc-cat option", "els => els.map(e => e.value)")
+        check("no Philippines category where there are no PH services", "__ph" not in opts, opts)
+
         # mass order ID list
         await pg.goto(W + "/dashboard/#mass")
         await pg.wait_for_selector("#id-list .id-row")

@@ -90,34 +90,40 @@ const selectedService = () => state.services.find((s) => s.id === state.serviceI
 
 const LIST_LIMIT = 80;              // rows rendered at once; search narrows the rest
 const RECOMMENDED = "__featured";
+const PHILIPPINES = "__ph";
+const isPH = (s) => /\bPH\b/.test(s.tier || "");   // "PH" and "Real · PH" tiers
 
 /** Every word of the query must appear in the service's id, name, description, tier or category. */
 function matches(s, q) {
   if (!q) return true;
-  const hay = `${s.id} ${s.name} ${s.description || ""} ${s.tier} ${s.category || ""}`.toLowerCase();
+  const hay = `${s.id} ${s.name} ${s.description || ""} ${s.tier} ${s.category || ""}${isPH(s) ? " philippines" : ""}`.toLowerCase();
   return q.split(/\s+/).every((w) => hay.includes(w));
 }
 
 function categoriesFor(platform) {
   const counts = new Map();
-  let featured = 0;
+  let featured = 0, ph = 0;
   for (const s of state.services) {
     if (s.platform !== platform) continue;
     if (s.featured) featured++;
+    if (isPH(s)) ph++;
     const c = s.category || "Other";
     counts.set(c, (counts.get(c) || 0) + 1);
   }
   const cats = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  return featured ? [[RECOMMENDED, featured], ...cats] : cats;
+  // Philippines is a cross-category view: its services also stay in their own category
+  return [...(featured ? [[RECOMMENDED, featured]] : []), ...(ph ? [[PHILIPPINES, ph]] : []), ...cats];
 }
 
-const categoryLabel = (c) => (c === RECOMMENDED ? "Recommended" : c);
+const categoryLabel = (c) => (c === RECOMMENDED ? "Recommended" : c === PHILIPPINES ? "Philippines" : c);
 
 function servicesForPlatform() {
   const q = state.search.trim().toLowerCase();
   return state.services.filter((s) => s.platform === state.platform && (q
     ? matches(s, q)   // searching looks across every category
-    : state.category === RECOMMENDED ? s.featured : (s.category || "Other") === state.category));
+    : state.category === RECOMMENDED ? s.featured
+      : state.category === PHILIPPINES ? isPH(s)
+        : (s.category || "Other") === state.category));
 }
 
 function svcSub(s) {
