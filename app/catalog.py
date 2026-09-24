@@ -24,7 +24,7 @@ IMPORT_TYPES = {"default", "custom comments"}
 EXCLUDE = re.compile(
     r"review|rating|\brate us\b|\bvotes?\b|\bvoting\b|\bpoll\b|traffic|monetiz|monetis"
     r"|ads? click|\bclicks?\b|app install|premium apps|subscriptions?\b.*\bapps?\b|not for you"
-    r"|\breports?\b|\bnetflix\b|\baccounts? for sale\b",
+    r"|\breports?\b|\bnetflix\b|\baccounts? for sale\b|down ?votes?",
     re.I,
 )
 # watch-time packages sold for monetisation thresholds (plain views that mention retention are fine)
