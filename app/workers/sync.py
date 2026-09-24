@@ -1,0 +1,167 @@
+"""Background sync: order statuses, refill statuses, provider catalogs.
+
+Runs in-process (see app.main lifespan) every SYNC_INTERVAL_SECONDS.
+Every step is idempotent, so overlapping or repeated runs are safe.
+"""
+import json
+import logging
+import time
+
+from app.config import get_settings
+from app.db import transaction
+from app.providers.smm_client import SMMClient
+
+log = logging.getLogger("sync")
+
+ORDER_STATUS = {
+    "pending": "pending", "in progress": "in_progress", "processing": "in_progress",
+    "completed": "completed", "partial": "partial", "canceled": "canceled", "cancelled": "canceled",
+}
+REFILL_STATUS = {"completed": "completed", "rejected": "rejected"}   # anything else stays pending
+
+CATALOG_EVERY_SECONDS = 6 * 3600
+_last_catalog_sync: dict[int, float] = {}
+
+
+async def sync_orders(client: SMMClient, provider_id: int) -> int:
+    async with transaction() as db:
+        rows = await db.fetch_all("""
+            select id, provider_order_id from orders
+             where provider_id = :p and status in ('pending', 'in_progress')
+               and provider_order_id is not null
+        """, {"p": provider_id})
+    if not rows:
+        return 0
+    by_pid = {str(r["provider_order_id"]): r["id"] for r in rows}
+    res = await client.statuses(by_pid.keys())
+
+    changed = 0
+    for pid, s in res.items():
+        if pid not in by_pid or not isinstance(s, dict) or "error" in s:
+            continue
+        status = ORDER_STATUS.get(str(s.get("status", "")).strip().lower(), "in_progress")
+        remains = max(int(float(s.get("remains") or 0)), 0)
+        start_count = s.get("start_count")
+        async with transaction() as db:
+            upd = await db.fetch_one("""
+                update orders
+                   set status = :st, remains = :rem,
+                       start_count = coalesce(CAST(:sc AS integer), start_count),
+                       cost = coalesce(CAST(:cost AS numeric), cost),
+                       completed_at = case when :st in ('completed', 'partial')
+                                           then coalesce(completed_at, now()) else completed_at end,
+                       updated_at = now()
+                 where id = :id and status in ('pending', 'in_progress')
+                returning id, user_id, price_php, quantity, status
+            """, {"st": status, "rem": remains,
+                  "sc": int(float(start_count)) if start_count not in (None, "") else None,
+                  "cost": str(s["charge"]) if s.get("charge") not in (None, "") else None,
+                  "id": by_pid[pid]})
+            if not upd:
+                continue
+            changed += 1
+            # partial/canceled → refund the unfilled portion, once (unique ledger index guards it)
+            if status in ("partial", "canceled"):
+                share = 1.0 if status == "canceled" else min(remains / upd["quantity"], 1.0)
+                refund = round(float(upd["price_php"]) * share, 2)
+                if refund > 0:
+                    await db.execute("""
+                        insert into ledger (user_id, delta, reason, ref)
+                        values (:u, :d, 'refund', :r) on conflict do nothing
+                    """, {"u": upd["user_id"], "d": refund, "r": str(upd["id"])})
+    return changed
+
+
+async def sync_refills(client: SMMClient, provider_id: int) -> int:
+    ignore_days = get_settings().refill_ignore_after_days
+    async with transaction() as db:
+        rows = await db.fetch_all("""
+            select id, provider_refill_id from provider_refills
+             where provider_id = :p and status = 'pending'
+        """, {"p": provider_id})
+    changed = 0
+    if rows:
+        by_rid = {str(r["provider_refill_id"]): r["id"] for r in rows}
+        for item in await client.refill_statuses(by_rid.keys()):
+            st = item.get("status")
+            rid = str(item.get("refill"))
+            if isinstance(st, dict) or rid not in by_rid:
+                continue
+            mapped = REFILL_STATUS.get(str(st).strip().lower())
+            if mapped:
+                async with transaction() as db:
+                    await db.execute("""
+                        update provider_refills set status = :s, resolved_at = now()
+                         where id = :id and status = 'pending'
+                    """, {"s": mapped, "id": by_rid[rid]})
+                changed += 1
+
+    # refills the provider never resolved → 'ignored' (feeds the provider scorecard)
+    async with transaction() as db:
+        await db.execute("""
+            update provider_refills set status = 'ignored', resolved_at = now()
+             where provider_id = :p and status = 'pending'
+               and requested_at < now() - make_interval(days => :d)
+        """, {"p": provider_id, "d": ignore_days})
+    return changed
+
+
+async def sync_catalog(client: SMMClient, provider_id: int) -> int:
+    services = await client.services()
+    async with transaction() as db:
+        for s in services:
+            await db.execute("""
+                insert into provider_services
+                  (provider_id, provider_service_id, name, category, type, rate,
+                   min_qty, max_qty, refill, cancel, raw, updated_at)
+                values (:p, :sid, :name, :cat, :type, CAST(:rate AS numeric), :min, :max,
+                        :refill, :cancel, CAST(:raw AS jsonb), now())
+                on conflict (provider_id, provider_service_id) do update set
+                  name = excluded.name, category = excluded.category, type = excluded.type,
+                  rate = excluded.rate, min_qty = excluded.min_qty, max_qty = excluded.max_qty,
+                  refill = excluded.refill, cancel = excluded.cancel, raw = excluded.raw,
+                  updated_at = now()
+            """, {"p": provider_id, "sid": int(s["service"]), "name": str(s.get("name", "")),
+                  "cat": s.get("category"), "type": s.get("type"), "rate": str(s.get("rate", "0")),
+                  "min": int(float(s.get("min") or 0)), "max": int(float(s.get("max") or 0)),
+                  "refill": bool(s.get("refill")), "cancel": bool(s.get("cancel")),
+                  "raw": json.dumps(s)})
+    return len(services)
+
+
+async def flag_stuck_orders() -> None:
+    """Orders debited but never confirmed upstream (crash mid-request) → manual review, not auto-refund."""
+    async with transaction() as db:
+        await db.execute("""
+            update orders set status = 'needs_review', updated_at = now()
+             where status = 'creating' and created_at < now() - interval '10 minutes'
+        """)
+
+
+async def run_sync_once() -> None:
+    async with transaction() as db:
+        providers = await db.fetch_all("select * from providers where active")
+    for p in providers:
+        try:
+            client = SMMClient.for_provider(p)
+        except Exception as e:
+            log.warning("provider %s skipped: %s", p["name"], e)
+            continue
+        for step in (sync_orders, sync_refills):
+            try:
+                n = await step(client, p["id"])
+                if n:
+                    log.info("%s %s: %d updated", p["name"], step.__name__, n)
+            except Exception:
+                log.exception("%s %s failed", p["name"], step.__name__)
+        if time.monotonic() - _last_catalog_sync.get(p["id"], -1e9) > CATALOG_EVERY_SECONDS:
+            try:
+                n = await sync_catalog(client, p["id"])
+                _last_catalog_sync[p["id"]] = time.monotonic()
+                log.info("%s catalog: %d services", p["name"], n)
+            except Exception:
+                log.exception("%s catalog sync failed", p["name"])
+    try:
+        await flag_stuck_orders()
+    except Exception:
+        log.exception("flag_stuck_orders failed")

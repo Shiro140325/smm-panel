@@ -1,0 +1,184 @@
+import asyncio
+import hashlib
+import hmac
+import json
+import os
+import sys
+import time
+import uuid
+
+import httpx
+
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[1]))
+API = "http://127.0.0.1:8000"
+MOCK = "http://127.0.0.1:9001"
+WH_SECRET = os.environ["PAYMONGO_WEBHOOK_SECRET"]
+results = []
+
+
+def check(name, cond, info=""):
+    results.append((name, bool(cond)))
+    print(("PASS " if cond else "FAIL ") + name + (f"  [{info}]" if info and not cond else ""))
+
+
+def signed(body: dict, secret=WH_SECRET, live=True):
+    raw = json.dumps(body).encode()
+    t = str(int(time.time()))
+    sig = hmac.new(secret.encode(), f"{t}.".encode() + raw, hashlib.sha256).hexdigest()
+    hdr = f"t={t},te=,li={sig}" if live else f"t={t},te={sig},li="
+    return raw, {"Paymongo-Signature": hdr, "Content-Type": "application/json"}
+
+
+def paid_event(topup_id, amount_php):
+    return {"data": {"id": "evt_1", "attributes": {"type": "checkout_session.payment.paid", "data": {
+        "id": "cs_1", "attributes": {"reference_number": topup_id, "metadata": {"topup_id": topup_id},
+                                     "payments": [{"attributes": {"amount": amount_php * 100}}]}}}}}
+
+
+async def sql(q, params=None):
+    from app.db import transaction
+    async with transaction() as db:
+        if q.strip().lower().startswith("select") or "returning" in q.lower():
+            return await db.fetch_all(q, params)
+        await db.execute(q, params)
+
+
+async def main():
+    from app.workers.sync import run_sync_once
+
+    # --- setup provider + catalog + services
+    await sql("insert into providers (name, api_url, api_key_env, currency) values ('mock', :u, 'MOCK_KEY', 'USD')",
+              {"u": f"{MOCK}/api/v2"})
+    await run_sync_once()
+    ps = await sql("select provider_service_id, rate, refill from provider_services order by 1")
+    check("catalog synced", len(ps) == 2, ps)
+    await sql("""insert into services (provider_id, provider_service_id, platform, name, tier, refill_days, markup_pct)
+                 values (1, 1, 'tiktok', 'TikTok Followers', 'Basic', 0, 80),
+                        (1, 2, 'tiktok', 'TikTok Followers', 'HQ', 30, 60)""")
+
+    c = httpx.AsyncClient(base_url=API)
+    r = await c.get("/services")
+    svcs = r.json()
+    # 0.50 USD * 58 * 1.8 = 52.20 ; 1.20 * 58 * 1.6 = 111.36
+    check("service pricing", [s["price_per_1k_php"] for s in svcs] == [52.2, 111.36], svcs)
+
+    # --- auth
+    r = await c.post("/auth/register", json={"email": "Juan@Example.com", "password": "password123"})
+    check("register", r.status_code == 200, r.text)
+    r = await c.post("/auth/register", json={"email": "juan@example.com", "password": "password123"})
+    check("duplicate email 409", r.status_code == 409, r.text)
+    c2 = httpx.AsyncClient(base_url=API)
+    r = await c2.post("/auth/login", json={"email": "juan@example.com", "password": "wrongpass1"})
+    check("bad login 401", r.status_code == 401)
+    r = await c2.get("/auth/me")
+    check("me without cookie 401", r.status_code == 401)
+    r = await c.get("/auth/me")
+    me = r.json()
+    check("me balance 0", r.status_code == 200 and me["balance_php"] == 0, r.text)
+
+    # --- order with no balance
+    r = await c.post("/orders", json={"service_id": 1, "link": "https://tiktok.com/@a", "quantity": 1000})
+    check("order without balance 402", r.status_code == 402, r.text)
+
+    # --- top-up via webhook
+    tid = str(uuid.uuid4())
+    await sql("insert into topups (id, user_id, amount_php, method) values (CAST(:id AS uuid), :u, 500, 'gcash')",
+              {"id": tid, "u": me["id"]})
+    raw, hdr = signed(paid_event(tid, 500), secret="wrong")
+    r = await c.post("/webhooks/paymongo", content=raw, headers=hdr)
+    check("webhook bad signature 401", r.status_code == 401)
+    raw, hdr = signed(paid_event(tid, 400))
+    r = await c.post("/webhooks/paymongo", content=raw, headers=hdr)
+    bal = (await c.get("/auth/me")).json()["balance_php"]
+    check("amount mismatch not credited", r.status_code == 200 and bal == 0, bal)
+    raw, hdr = signed(paid_event(tid, 500), live=False)
+    r = await c.post("/webhooks/paymongo", content=raw, headers=hdr)
+    r2 = await c.post("/webhooks/paymongo", content=raw, headers=hdr)
+    bal = (await c.get("/auth/me")).json()["balance_php"]
+    check("topup credited once (test-mode sig, retried)", r.status_code == 200 and r2.status_code == 200 and bal == 500, bal)
+    raw, hdr = signed({"data": {"attributes": {"type": "checkout_session.payment.paid", "data": {"id": "x", "attributes": {
+        "reference_number": "not-a-uuid", "payments": [{"attributes": {"amount": 100}}]}}}}})
+    r = await c.post("/webhooks/paymongo", content=raw, headers=hdr)
+    check("garbage topup id → 200, ignored", r.status_code == 200, r.text)
+
+    # --- orders
+    r = await c.post("/orders", json={"service_id": 1, "link": "https://tiktok.com/@a", "quantity": 50})
+    check("below min 400", r.status_code == 400, r.text)
+    r = await c.post("/orders", json={"service_id": 1, "link": "tiktok.com/@a", "quantity": 1000})
+    check("bad link 422", r.status_code == 422, r.text)
+    r = await c.post("/orders", json={"service_id": 1, "link": "https://tiktok.com/@reject", "quantity": 1000})
+    bal = (await c.get("/auth/me")).json()["balance_php"]
+    check("provider reject → 400 + full refund", r.status_code == 400 and bal == 500, f"{r.text} bal={bal}")
+
+    r = await c.post("/orders", json={"service_id": 1, "link": "https://tiktok.com/@a", "quantity": 2000})
+    o_basic = r.json()
+    check("basic order placed, charge 104.40", r.status_code == 200 and o_basic["charge_php"] == 104.4, r.text)
+    r = await c.post("/orders", json={"service_id": 2, "link": "https://tiktok.com/@a", "quantity": 1000})
+    o_hq = r.json()
+    check("HQ order placed, charge 111.36", r.status_code == 200 and o_hq["charge_php"] == 111.36, r.text)
+    bal = (await c.get("/auth/me")).json()["balance_php"]
+    check("balance after orders 284.24", bal == 284.24, bal)
+
+    r = await c.post("/orders", json={"service_id": 2, "link": "https://tiktok.com/@a", "quantity": 3000})
+    check("overspend blocked 402", r.status_code == 402, r.text)
+
+    # --- sync: basic partial (500 of 2000 remain), HQ completed
+    pos = await sql("select id, provider_order_id from orders where status = 'pending' order by id")
+    pid = {o["id"]: str(o["provider_order_id"]) for o in pos}
+    m = httpx.AsyncClient(base_url=MOCK)
+    await m.post("/_set_order", data={"oid": pid[o_basic["id"]], "status": "Partial", "remains": "500"})
+    await m.post("/_set_order", data={"oid": pid[o_hq["id"]], "status": "Completed", "remains": "0"})
+    await run_sync_once()
+    await run_sync_once()  # idempotent
+    bal = (await c.get("/auth/me")).json()["balance_php"]
+    # refund 104.40 * 500/2000 = 26.10 → 310.34
+    check("partial refunded once (26.10)", bal == 310.34, bal)
+
+    orders = (await c.get("/orders")).json()
+    by_id = {o["id"]: o for o in orders}
+    check("list: statuses", by_id[o_basic["id"]]["status"] == "partial" and by_id[o_hq["id"]]["status"] == "completed",
+          orders)
+    check("list: refill_state", by_id[o_basic["id"]]["refill_state"] == "none"
+          and by_id[o_hq["id"]]["refill_state"] == "available", orders)
+    check("list: refunded_php", float(by_id[o_basic["id"]]["refunded_php"]) == 26.1, by_id[o_basic["id"]])
+    r = await c.get("/orders", params={"status": "partial"})
+    check("filter by status", [o["id"] for o in r.json()] == [o_basic["id"]], r.text)
+    r = await c.get("/orders", params={"q": f"#{o_hq['id']}"})
+    check("search by #id", [o["id"] for o in r.json()] == [o_hq["id"]], r.text)
+
+    # --- refills
+    r = await c.post(f"/orders/{o_basic['id']}/refill")
+    check("refill on no-refill service 400", r.status_code == 400, r.text)
+    r = await c.post(f"/orders/{o_hq['id']}/refill")
+    check("refill requested", r.status_code == 200, r.text)
+    rid = str(r.json().get("refill_id"))
+    r = await c.post(f"/orders/{o_hq['id']}/refill")
+    check("second refill while pending 409", r.status_code == 409, r.text)
+    st = (await c.get("/orders")).json()
+    check("refill_state requested", {o["id"]: o for o in st}[o_hq["id"]]["refill_state"] == "requested", st)
+    await m.post("/_set_refill", data={"rid": rid, "status": "Completed"})
+    await run_sync_once()
+    rows = await sql("select status, resolved_at from provider_refills")
+    check("refill completed via sync", rows[0]["status"] == "completed" and rows[0]["resolved_at"], rows)
+    st = (await c.get("/orders")).json()
+    check("refill available again after completion", {o["id"]: o for o in st}[o_hq["id"]]["refill_state"] == "available", st)
+
+    # --- other user can't touch my order
+    await c2.post("/auth/register", json={"email": "other@example.com", "password": "password123"})
+    r = await c2.post(f"/orders/{o_hq['id']}/refill")
+    check("other user's order 404", r.status_code == 404, r.text)
+
+    # --- ledger integrity
+    led = await sql("select reason, sum(delta) s, count(*) n from ledger where user_id = :u group by reason order by reason",
+                    {"u": me["id"]})
+    print(led)
+    await c.aclose(); await c2.aclose(); await m.aclose()
+
+    failed = [n for n, ok in results if not ok]
+    print(f"\n{len(results) - len(failed)}/{len(results)} passed")
+    if failed:
+        print("FAILED:", failed)
+        sys.exit(1)
+
+
+asyncio.run(main())
