@@ -1,7 +1,7 @@
 // Shared helpers for every page.
 
-const LOCAL = ["localhost", "127.0.0.1"].includes(location.hostname);
-export const API_BASE = LOCAL ? `http://${location.hostname}:8000` : "https://server.smmshiro.com";
+// The API and this site are served by the same FastAPI service, so API calls are same-origin.
+export const API_BASE = "";
 
 export const PLATFORMS = {
   tiktok: "TikTok", facebook: "Facebook", instagram: "Instagram", youtube: "YouTube",

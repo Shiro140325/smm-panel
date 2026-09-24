@@ -1,9 +1,11 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app import fx
 from app.config import get_settings
@@ -54,3 +56,10 @@ async def health():
 @app.get("/fx")
 async def fx_rate():
     return fx.status()
+
+
+# Frontend: serve web/ at the root. Mounted last so API routes above win.
+# html=True serves index.html for "/", "/login/", "/dashboard/" and redirects "/login" → "/login/".
+WEB_DIR = Path(__file__).resolve().parents[1] / "web"
+if WEB_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

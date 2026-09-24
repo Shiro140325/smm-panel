@@ -94,13 +94,11 @@ API docs at `http://localhost:8000/docs`.
 
 ## Frontend (`web/`)
 
-Plain HTML/CSS/JS, no build step. Pages: `/` (landing with live prices), `/login/`, `/dashboard/` (New order, Orders, Add funds via `#new`, `#orders`, `#funds`).
+Plain HTML/CSS/JS, no build step, **served by the same FastAPI service** (mounted at `/` after the API routes), so the site and API share one origin.
+Pages: `/` (landing with live prices), `/login/`, `/dashboard/` (New order, Orders, Add funds via `#new`, `#orders`, `#funds`).
 Design tokens (colors, fonts, radii) are CSS variables at the top of `web/assets/app.css`.
-The API base is picked in `web/assets/common.js`: `http://localhost:8000` locally, `https://server.smmshiro.com` otherwise.
 
-Local: `cd web && python -m http.server 3000` with the API on :8000 and `FRONTEND_ORIGIN=http://localhost:3000`, `COOKIE_SECURE=false`.
-
-**Render Static Site:** New → Static Site → this repo · Build command: *(empty)* · Publish directory: `web` · custom domain `smmshiro.com` (+ `www`).
+Point both `smmshiro.com` and `server.smmshiro.com` at the one Render web service.
 
 ## Not built yet
 
