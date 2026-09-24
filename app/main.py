@@ -1,11 +1,17 @@
 import asyncio
+import hashlib
 import logging
+import os
+import re
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.datastructures import Headers
 
 from app import fx
 from app.config import get_settings
@@ -63,14 +69,27 @@ async def fx_rate():
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 
 
-class RevalidatingStaticFiles(StaticFiles):
-    """Browsers must re-check files on every load (cheap 304 via ETag), so deploys show up immediately."""
+# Every deploy gets a new asset version, stamped onto script/stylesheet URLs in HTML and JS
+# ("/assets/app.css" → "/assets/app.css?v=<commit>"), so no browser or CDN cache can serve an old file.
+ASSET_VERSION = (os.environ.get("RENDER_GIT_COMMIT") or str(int(time.time())))[:10]
+_ASSET_URL = re.compile(r"""((?:/assets/|\./)[\w.-]+\.(?:js|css))(["'])""")
 
+
+class WebFiles(StaticFiles):
     async def get_response(self, path, scope):
         response = await super().get_response(path, scope)
-        response.headers["Cache-Control"] = "no-cache"
-        return response
+        response.headers["Cache-Control"] = "no-cache"   # always revalidate (cheap 304 via ETag)
+        media = (getattr(response, "media_type", "") or "")
+        if response.status_code != 200 or not isinstance(response, FileResponse) \
+                or not ("html" in media or "javascript" in media):
+            return response
+        body = _ASSET_URL.sub(rf"\1?v={ASSET_VERSION}\2", Path(response.path).read_text("utf-8")).encode()
+        etag = '"' + hashlib.md5(body).hexdigest() + '"'
+        headers = {"Cache-Control": "no-cache", "ETag": etag}
+        if etag in Headers(scope=scope).get("if-none-match", ""):
+            return Response(status_code=304, headers=headers)
+        return Response(body, media_type=response.media_type, headers=headers)
 
 
 if WEB_DIR.is_dir():
-    app.mount("/", RevalidatingStaticFiles(directory=WEB_DIR, html=True), name="web")
+    app.mount("/", WebFiles(directory=WEB_DIR, html=True), name="web")
