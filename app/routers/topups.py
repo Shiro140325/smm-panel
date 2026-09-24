@@ -1,5 +1,4 @@
 import uuid
-from typing import Literal
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
@@ -16,7 +15,6 @@ PAYMONGO_API = "https://api.paymongo.com/v1"
 
 class TopupIn(BaseModel):
     amount_php: int
-    method: Literal["gcash", "paymaya"] = "gcash"
 
 
 @router.post("")
@@ -30,13 +28,15 @@ async def create_topup(body: TopupIn, user: dict = Depends(current_user)):
     topup_id = str(uuid.uuid4())
     async with transaction() as db:
         await db.execute("""
-            insert into topups (id, user_id, amount_php, method) values (:id, :u, :a, :m)
-        """, {"id": topup_id, "u": user["id"], "a": body.amount_php, "m": body.method})
+            insert into topups (id, user_id, amount_php, method) values (:id, :u, :a, 'paymongo')
+        """, {"id": topup_id, "u": user["id"], "a": body.amount_php})
+        # method is updated to the one actually used (gcash, paymaya, ...) when the webhook credits it
 
     payload = {"data": {"attributes": {
         "line_items": [{"name": "Wallet top-up", "amount": body.amount_php * 100,
                         "currency": "PHP", "quantity": 1}],
-        "payment_method_types": [body.method],     # e-wallets only: cards invite chargebacks
+        # customer picks on PayMongo's checkout; e-wallets only by default (cards invite chargebacks)
+        "payment_method_types": s.paymongo_method_list,
         "reference_number": topup_id,
         "description": f"Wallet top-up ₱{body.amount_php:,}",
         "metadata": {"topup_id": topup_id},

@@ -49,11 +49,13 @@ async def paymongo_webhook(request: Request):
         log.warning("paid event without valid topup id/payments: %s", event["data"].get("id"))
         return {"ok": True}
     paid_php = sum(int(p["attributes"]["amount"]) for p in payments) // 100
+    source = ((payments[0].get("attributes") or {}).get("source") or {}).get("type")  # gcash, paymaya, ...
 
     async with transaction() as db:
         credited = await db.fetch_one("""
             with upd as (
-              update topups set status = 'credited', credited_at = now()
+              update topups set status = 'credited', credited_at = now(),
+                                method = coalesce(CAST(:src AS text), method)
                where id = CAST(:id AS uuid) and status = 'pending' and amount_php = :amt
               returning id, user_id, amount_php
             )
@@ -61,7 +63,7 @@ async def paymongo_webhook(request: Request):
             select user_id, amount_php, 'topup', id::text from upd
             on conflict do nothing
             returning user_id, delta
-        """, {"id": topup_id, "amt": paid_php})
+        """, {"id": topup_id, "amt": paid_php, "src": str(source)[:20] if source else None})
     if not credited:
         log.info("topup %s not credited (already credited, unknown, or amount mismatch %s)", topup_id, paid_php)
     return {"ok": True}

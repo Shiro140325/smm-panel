@@ -16,6 +16,11 @@ class Settings(BaseSettings):
 
     paymongo_secret_key: str = ""
     paymongo_webhook_secret: str = ""
+    paymongo_methods: str = "gcash,paymaya"   # shown on PayMongo checkout; must be enabled on your account
+
+    @property
+    def paymongo_method_list(self) -> list[str]:
+        return [m.strip() for m in self.paymongo_methods.split(",") if m.strip()]
 
     usd_to_php: float = 62.0          # fallback only; live rate comes from app/fx.py
     fx_buffer_pct: float = 2.0        # added on top of the live rate for pricing

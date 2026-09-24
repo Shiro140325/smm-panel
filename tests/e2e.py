@@ -32,7 +32,7 @@ def signed(body: dict, secret=WH_SECRET, live=True):
 def paid_event(topup_id, amount_php):
     return {"data": {"id": "evt_1", "attributes": {"type": "checkout_session.payment.paid", "data": {
         "id": "cs_1", "attributes": {"reference_number": topup_id, "metadata": {"topup_id": topup_id},
-                                     "payments": [{"attributes": {"amount": amount_php * 100}}]}}}}}
+                                     "payments": [{"attributes": {"amount": amount_php * 100, "source": {"type": "gcash"}}}]}}}}}
 
 
 async def sql(q, params=None):
@@ -85,7 +85,7 @@ async def main():
 
     # --- top-up via webhook
     tid = str(uuid.uuid4())
-    await sql("insert into topups (id, user_id, amount_php, method) values (CAST(:id AS uuid), :u, 500, 'gcash')",
+    await sql("insert into topups (id, user_id, amount_php, method) values (CAST(:id AS uuid), :u, 500, 'paymongo')",
               {"id": tid, "u": me["id"]})
     raw, hdr = signed(paid_event(tid, 500), secret="wrong")
     r = await c.post("/webhooks/paymongo", content=raw, headers=hdr)
@@ -99,6 +99,8 @@ async def main():
     r2 = await c.post("/webhooks/paymongo", content=raw, headers=hdr)
     bal = (await c.get("/auth/me")).json()["balance_php"]
     check("topup credited once (test-mode sig, retried)", r.status_code == 200 and r2.status_code == 200 and bal == 500, bal)
+    m = await sql("select method, status from topups where id = CAST(:id AS uuid)", {"id": tid})
+    check("topup records actual method (gcash)", m[0]["method"] == "gcash" and m[0]["status"] == "credited", m)
     raw, hdr = signed({"data": {"attributes": {"type": "checkout_session.payment.paid", "data": {"id": "x", "attributes": {
         "reference_number": "not-a-uuid", "payments": [{"attributes": {"amount": 100}}]}}}}})
     r = await c.post("/webhooks/paymongo", content=raw, headers=hdr)

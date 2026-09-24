@@ -20,7 +20,6 @@ const state = {
   ordersFilter: "",
   ordersQuery: "",
   // funds
-  method: "gcash",
   amount: "500",
 };
 
@@ -349,10 +348,7 @@ function renderOrders() {
 
 /* ---------------------------------------------------------------- funds */
 
-const METHODS = [
-  { id: "gcash", label: "GCash", mark: "G", color: "#0B57D0" },
-  { id: "paymaya", label: "Maya", mark: "M", color: "#0F7A4D" },
-];
+const METHOD_LABEL = { gcash: "GCash", paymaya: "Maya", paymongo: "PayMongo", card: "Card", grab_pay: "GrabPay", qrph: "QR Ph" };
 const PRESETS = [100, 500, 1000, 5000];
 const TOPUP_MIN = 100, TOPUP_MAX = 50000;
 
@@ -364,7 +360,6 @@ function amountValue() {
 function updateFunds() {
   const amt = amountValue();
   const ok = amt >= TOPUP_MIN && amt <= TOPUP_MAX;
-  const m = METHODS.find((x) => x.id === state.method);
   document.getElementById("sum-pay").textContent = peso(ok ? amt : 0);
   document.getElementById("sum-add").textContent = peso(ok ? amt : 0);
   document.getElementById("sum-new").textContent = peso((state.user?.balance_php || 0) + (ok ? amt : 0));
@@ -373,7 +368,7 @@ function updateFunds() {
   hint.classList.toggle("error", !!amt && !ok);
   const btn = document.getElementById("pay");
   btn.disabled = !ok || state.paying;
-  btn.innerHTML = state.paying ? "Opening checkout…" : ok ? `${icons.lock(18)} Pay ${peso(amt)} with ${m.label}` : "Enter a valid amount";
+  btn.innerHTML = state.paying ? "Opening checkout…" : ok ? `${icons.lock(18)} Pay ${peso(amt)}` : "Enter a valid amount";
   document.querySelectorAll("[data-preset]").forEach((b) => b.setAttribute("aria-pressed", Number(b.dataset.preset) === amt));
 }
 
@@ -387,7 +382,7 @@ async function loadTopups() {
     return `<div class="topup-item">
       <div style="display:flex;align-items:center;gap:10px"><span style="flex:1;font-weight:700">${peso(t.amount_php)}</span>
         <span class="badge ${credited ? "badge-completed" : "badge-pending"}">${credited ? "Credited" : "Awaiting payment"}</span></div>
-      <div class="hint">${t.method === "paymaya" ? "Maya" : "GCash"} · ${fmtDate(t.created_at)}</div>
+      <div class="hint">${esc(METHOD_LABEL[t.method] || t.method)} · ${fmtDate(t.created_at)}</div>
       ${!credited && t.checkout_url ? `<a href="${esc(t.checkout_url)}" style="font-size:13px;font-weight:600">Resume payment</a>` : ""}
     </div>`;
   }).join("") : `<p class="muted" style="font-size:14px">No top-ups yet.</p>`;
@@ -423,15 +418,6 @@ function renderFunds(params) {
     <div class="two-col">
       <form class="card panel primary" id="funds-form" novalidate>
         <div class="field">
-          <span class="label" id="pay-label">Pay with</span>
-          <div class="method-grid" role="group" aria-labelledby="pay-label">
-            ${METHODS.map((m) => `<button type="button" class="method" data-method="${m.id}" aria-pressed="${m.id === state.method}">
-              <span class="mark" style="background:${m.color}" aria-hidden="true">${m.mark}</span>
-              <span><span style="display:block;font-weight:700">${m.label}</span><span class="hint">Credited automatically</span></span>
-            </button>`).join("")}
-          </div>
-        </div>
-        <div class="field">
           <label for="amount">Amount</label>
           <div class="amount-row">
             ${PRESETS.map((p) => `<button type="button" class="pill" data-preset="${p}" aria-pressed="false">${peso(p).replace(".00", "")}</button>`).join("")}
@@ -445,18 +431,13 @@ function renderFunds(params) {
           <div style="border-top:1px solid var(--line);padding-top:10px"><span class="muted">New balance</span><span style="font-family:var(--font-display);font-weight:700;font-size:20px" id="sum-new"></span></div>
         </div>
         <button class="btn btn-primary btn-lg btn-block" id="pay" type="submit"></button>
-        <p class="hint" style="text-align:center">You'll finish paying on PayMongo's secure checkout. Your balance updates as soon as the payment is confirmed, usually within a minute.</p>
+        <p class="hint" style="text-align:center">You'll pick GCash or Maya and pay on PayMongo's secure checkout. Your balance updates as soon as the payment is confirmed, usually within a minute.</p>
       </form>
       <div class="aside">
         <div class="card details"><h3>Recent top-ups</h3><div id="topups"><p class="muted" style="font-size:14px">Loading…</p></div></div>
       </div>
     </div>`;
 
-  view.querySelectorAll("[data-method]").forEach((b) => b.addEventListener("click", () => {
-    state.method = b.dataset.method;
-    view.querySelectorAll("[data-method]").forEach((x) => x.setAttribute("aria-pressed", x === b));
-    updateFunds();
-  }));
   view.querySelectorAll("[data-preset]").forEach((b) => b.addEventListener("click", () => {
     state.amount = b.dataset.preset;
     document.getElementById("amount").value = state.amount;
@@ -470,7 +451,7 @@ function renderFunds(params) {
     state.paying = true;
     updateFunds();
     try {
-      const res = await api("/topups", { method: "POST", body: { amount_php: amt, method: state.method } });
+      const res = await api("/topups", { method: "POST", body: { amount_php: amt } });
       location.href = res.checkout_url;
     } catch (ex) {
       toast(ex.message, { bad: true });
