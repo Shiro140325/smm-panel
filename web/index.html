@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SMM Shiro — Social media growth, clearly labeled</title>
 <meta name="description" content="Followers, likes and views for TikTok, Facebook, Instagram and YouTube. Every service labeled by quality, with refill terms shown before you pay. Top up with GCash or Maya.">
+<meta name="theme-color" content="#F6F5F1">
+<script>/* apply saved theme before first paint */(function(){try{var t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}})();</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Figtree:wght@400;500;600;700&display=swap">
@@ -16,7 +18,7 @@
 <body>
 <header class="site-header">
   <div class="wrap">
-    <a class="brand" href="/" aria-label="SMM Shiro home"><img src="/assets/img/logo.png" alt="SMM Shiro" width="132" height="44"></a>
+    <a class="brand" href="/" aria-label="SMM Shiro home"><img class="logo-ink" src="/assets/img/logo.png" alt="SMM Shiro" width="132" height="44"></a>
     <nav class="site-nav" aria-label="Main">
       <a href="#services">Services</a>
       <a href="#quality">Service quality</a>
@@ -24,6 +26,7 @@
       <a href="#faq">FAQ</a>
     </nav>
     <div class="header-actions">
+      <button class="theme-btn" type="button" data-theme-toggle aria-label="Theme"></button>
       <a class="btn btn-ghost" href="/login/">Log in</a>
       <a class="btn btn-primary" href="/login/?mode=register">Create account</a>
     </div>

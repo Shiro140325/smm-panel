@@ -1,7 +1,9 @@
 import {
-  api, esc, fmtDate, num, orderCharge, peso, PLATFORMS, PLATFORM_ORDER, refillText, tierBadge, toast,
+  api, esc, fmtDate, initTheme, num, orderCharge, peso, PLATFORMS, PLATFORM_ORDER, refillText, tierBadge, toast,
 } from "./common.js";
 import { icons } from "./icons.js";
+
+initTheme(icons);
 
 const view = document.getElementById("view");
 const state = {

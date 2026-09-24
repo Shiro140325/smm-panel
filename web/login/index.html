@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Log in — SMM Shiro</title>
+<meta name="theme-color" content="#F6F5F1">
+<script>/* apply saved theme before first paint */(function(){try{var t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}})();</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Figtree:wght@400;500;600;700&display=swap">
@@ -13,9 +15,10 @@
 <link rel="stylesheet" href="/assets/app.css">
 </head>
 <body>
+<div class="theme-corner"><button class="theme-btn" type="button" data-theme-toggle aria-label="Theme"></button></div>
 <main class="auth-page">
   <div class="card auth-card">
-    <a class="brand brand-lg" href="/" aria-label="SMM Shiro home" style="align-self:center"><img src="/assets/img/logo.png" alt="SMM Shiro" width="132" height="44"></a>
+    <a class="brand brand-lg" href="/" aria-label="SMM Shiro home" style="align-self:center"><img class="logo-ink" src="/assets/img/logo.png" alt="SMM Shiro" width="132" height="44"></a>
     <div class="tabs" role="tablist" aria-label="Account">
       <button type="button" role="tab" id="tab-login" aria-selected="true">Log in</button>
       <button type="button" role="tab" id="tab-register" aria-selected="false">Create account</button>
@@ -37,7 +40,9 @@
   </div>
 </main>
 <script type="module">
-  import { api } from "/assets/common.js";
+  import { api, initTheme } from "/assets/common.js";
+  import { icons } from "/assets/icons.js";
+  initTheme(icons);
 
   const params = new URLSearchParams(location.search);
   let mode = params.get("mode") === "register" ? "register" : "login";

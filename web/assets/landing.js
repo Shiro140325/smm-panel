@@ -1,7 +1,8 @@
-import { api, esc, num, peso, PLATFORMS, PLATFORM_ORDER, refillText, tierBadge } from "./common.js";
+import { api, esc, initTheme, num, peso, PLATFORMS, PLATFORM_ORDER, refillText, tierBadge } from "./common.js";
 import { icons } from "./icons.js";
 
 document.getElementById("warn-icon").innerHTML = icons.warn(24);
+initTheme(icons);
 
 let services = [];
 let current = "tiktok";

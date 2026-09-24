@@ -82,6 +82,61 @@ export function toast(message, { bad = false } = {}) {
   toastTimer = setTimeout(() => el.classList.remove("show"), 3200);
 }
 
+/* ------------------------------------------------------------------ theme
+   "system" (default) follows the device and updates live; "light"/"dark" override it.
+   The inline <head> script applies a saved override before first paint. */
+
+const THEME_KEY = "theme";
+const THEMES = ["system", "light", "dark"];
+const THEME_LABEL = { system: "System", light: "Light", dark: "Dark" };
+const darkQuery = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
+
+export function getThemeMode() {
+  try {
+    const t = localStorage.getItem(THEME_KEY);
+    return THEMES.includes(t) ? t : "system";
+  } catch { return "system"; }
+}
+
+function resolvedTheme(mode) {
+  return mode === "system" ? (darkQuery && darkQuery.matches ? "dark" : "light") : mode;
+}
+
+function applyTheme(mode) {
+  const root = document.documentElement;
+  if (mode === "system") delete root.dataset.theme;
+  else root.dataset.theme = mode;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = resolvedTheme(mode) === "dark" ? "#0F1115" : "#F6F5F1";
+}
+
+export function initTheme(iconSet) {
+  const buttons = [...document.querySelectorAll("[data-theme-toggle]")];
+  const paint = () => {
+    const mode = getThemeMode();
+    const next = THEMES[(THEMES.indexOf(mode) + 1) % THEMES.length];
+    const icon = mode === "system" ? iconSet.monitor : mode === "light" ? iconSet.sun : iconSet.moon;
+    buttons.forEach((b) => {
+      b.innerHTML = icon(18);
+      const label = `Theme: ${THEME_LABEL[mode]}${mode === "system" ? ` (${resolvedTheme(mode)})` : ""}. Switch to ${THEME_LABEL[next]}`;
+      b.setAttribute("aria-label", label);
+      b.title = label;
+    });
+  };
+  buttons.forEach((b) => b.addEventListener("click", () => {
+    const mode = getThemeMode();
+    const next = THEMES[(THEMES.indexOf(mode) + 1) % THEMES.length];
+    try { localStorage.setItem(THEME_KEY, next); } catch { /* private mode: still applies for this page */ }
+    applyTheme(next);
+    paint();
+    toast(`Theme: ${THEME_LABEL[next]}${next === "system" ? " (follows your device)" : ""}`);
+  }));
+  // follow the device live while on System
+  darkQuery?.addEventListener?.("change", () => { if (getThemeMode() === "system") { applyTheme("system"); paint(); } });
+  applyTheme(getThemeMode());
+  paint();
+}
+
 export function fmtDate(iso) {
   const d = new Date(iso);
   return d.toLocaleString("en-PH", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
