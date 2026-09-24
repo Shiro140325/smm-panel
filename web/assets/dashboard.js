@@ -579,7 +579,9 @@ async function loadOrders() {
     return `<tr>
       <td data-col="id" class="mono" style="font-size:13px">#${o.id}</td>
       <td data-col="date" style="font-size:13px;color:var(--muted);white-space:nowrap">${fmtDate(o.created_at)}</td>
-      <td data-col="svc"><div class="svc">${esc(o.service_name)} ${tierBadge(o.tier)}</div><div class="link">${esc(o.link)}</div></td>
+      <td data-col="svc"><div class="svc">${esc(o.service_name)} ${tierBadge(o.tier)}</div>${/^https?:\/\//i.test(o.link || "")
+        ? `<a class="btn open-link" href="${esc(o.link)}" target="_blank" rel="noopener noreferrer" title="${esc(o.link)}">${icons.external(14)}Open link</a>`
+        : ""}</td>
       <td data-col="qty" class="num">${num(o.quantity)}</td>
       <td data-col="remains" class="num muted">${o.remains == null ? "–" : num(o.remains)}</td>
       <td data-col="charge" class="num" style="font-weight:600">${peso(o.price_php)}</td>
