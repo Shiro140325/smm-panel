@@ -107,27 +107,48 @@ async def sync_refills(client: SMMClient, provider_id: int) -> int:
     return changed
 
 
+def _truthy(v) -> bool:
+    if isinstance(v, str):
+        return v.strip().lower() in ("1", "true", "yes")
+    return bool(v)
+
+
 async def sync_catalog(client: SMMClient, provider_id: int) -> int:
     services = await client.services()
+    by_sid: dict[int, dict] = {}   # dedupe: ON CONFLICT can't touch the same row twice
+    for s in services:
+        try:
+            by_sid[int(s["service"])] = ({
+                "sid": int(s["service"]), "name": str(s.get("name") or ""),
+                "cat": s.get("category"), "type": s.get("type"),
+                "rate": str(float(s.get("rate") or 0)),
+                "min": int(float(s.get("min") or 0)), "max": int(float(s.get("max") or 0)),
+                "refill": _truthy(s.get("refill")), "cancel": _truthy(s.get("cancel")),
+                "raw": s,
+            })
+        except (KeyError, TypeError, ValueError):
+            log.warning("skipping malformed service: %r", s)
+    rows = list(by_sid.values())
+    if not rows:
+        return 0
+    # one round trip for the whole catalog (thousands of rows)
     async with transaction() as db:
-        for s in services:
-            await db.execute("""
-                insert into provider_services
-                  (provider_id, provider_service_id, name, category, type, rate,
-                   min_qty, max_qty, refill, cancel, raw, updated_at)
-                values (:p, :sid, :name, :cat, :type, CAST(:rate AS numeric), :min, :max,
-                        :refill, :cancel, CAST(:raw AS jsonb), now())
-                on conflict (provider_id, provider_service_id) do update set
-                  name = excluded.name, category = excluded.category, type = excluded.type,
-                  rate = excluded.rate, min_qty = excluded.min_qty, max_qty = excluded.max_qty,
-                  refill = excluded.refill, cancel = excluded.cancel, raw = excluded.raw,
-                  updated_at = now()
-            """, {"p": provider_id, "sid": int(s["service"]), "name": str(s.get("name", "")),
-                  "cat": s.get("category"), "type": s.get("type"), "rate": str(s.get("rate", "0")),
-                  "min": int(float(s.get("min") or 0)), "max": int(float(s.get("max") or 0)),
-                  "refill": bool(s.get("refill")), "cancel": bool(s.get("cancel")),
-                  "raw": json.dumps(s)})
-    return len(services)
+        await db.execute("""
+            insert into provider_services
+              (provider_id, provider_service_id, name, category, type, rate,
+               min_qty, max_qty, refill, cancel, raw, updated_at)
+            select :p, x.sid, x.name, x.cat, x.type, CAST(x.rate AS numeric),
+                   x.min, x.max, x.refill, x.cancel, x.raw, now()
+              from jsonb_to_recordset(CAST(:rows AS jsonb)) as x(
+                     sid bigint, name text, cat text, type text, rate text,
+                     min integer, max integer, refill boolean, cancel boolean, raw jsonb)
+            on conflict (provider_id, provider_service_id) do update set
+              name = excluded.name, category = excluded.category, type = excluded.type,
+              rate = excluded.rate, min_qty = excluded.min_qty, max_qty = excluded.max_qty,
+              refill = excluded.refill, cancel = excluded.cancel, raw = excluded.raw,
+              updated_at = now()
+        """, {"p": provider_id, "rows": json.dumps(rows)})
+    return len(rows)
 
 
 async def flag_stuck_orders() -> None:
