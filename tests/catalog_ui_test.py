@@ -68,8 +68,10 @@ async def main():
         rest = prices[featured_n:]
         check("non-featured sorted cheapest first", rest == sorted(rest), rest[:10])
 
-        await pg.fill("#svc-search", "brazil")
-        await pg.wait_for_timeout(150)
+        await pg.evaluate("window.__search = document.getElementById('svc-search')")
+        await pg.type("#svc-search", "brazil", delay=20)
+        await pg.wait_for_timeout(200)
+        check("typing never rebuilds the search box", await pg.evaluate("document.getElementById('svc-search') === window.__search"))
         names = await pg.eval_on_selector_all("#svc-list .svc-option", "els => els.map(e => e.textContent.toLowerCase())")
         check("search looks across categories", len(names) > 0 and all("brazil" in t for t in names), names[:5])
         check("category select disabled while searching", await pg.is_disabled("#svc-cat"))
@@ -112,13 +114,25 @@ async def main():
         opts = await pg.eval_on_selector_all("#svc-cat option", "els => els.map(e => e.value)")
         check("no Philippines category where there are no PH services", "__ph" not in opts, opts)
 
+        # Non-drop: the provider's own non-drop claim, as a cross-category view
+        await pg.click('[data-platform="instagram"]')
+        await pg.select_option("#svc-cat", "__nondrop")
+        subs = await pg.eval_on_selector_all("#svc-list .svc-option .s", "els => els.map(e => e.textContent)")
+        n_nd = int(psql("select count(*) from services s join provider_services ps using (provider_id, provider_service_id) "
+                        "where s.active and s.platform='instagram' and normalize(ps.name, NFKC) ~* '(non|no)[ -]?drop'"))
+        check("Non-drop lists every non-drop service and nothing else", n_nd > 0 and len(subs) == min(n_nd, 80)
+              and all("Non-drop" in x for x in subs), (n_nd, subs[:3]))
+        await pg.click('[data-platform="discord"]')
+        opts = await pg.eval_on_selector_all("#svc-cat option", "els => els.map(e => e.value)")
+        check("no Non-drop category where there are none", "__nondrop" not in opts, opts)
+
         # mass order ID list
         await pg.goto(W + "/dashboard/#mass")
         await pg.wait_for_selector("#id-list .id-row")
         check("ID list capped", await pg.locator("#id-list .id-row").count() == 80
               and "Showing 80 of" in await pg.inner_text("#id-list"))
         await pg.fill("#id-search", "indonesia likes")
-        await pg.wait_for_timeout(100)
+        await pg.wait_for_timeout(250)
         rows = await pg.eval_on_selector_all("#id-list .id-row", "els => els.map(e => e.textContent.toLowerCase())")
         check("ID list multi-word search", len(rows) > 0 and all("indonesia" in r and "like" in r for r in rows), rows[:5])
         await pg.screenshot(path=f"{OUT}/cat-mass.png", full_page=True)

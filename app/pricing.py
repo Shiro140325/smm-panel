@@ -43,7 +43,7 @@ def order_price_php(per_1k: float, quantity: int) -> float:
 SERVICE_SELECT = """
     select s.id, s.platform, s.category, s.auto, s.sort, s.name, s.tier, s.description, s.start_time, s.speed,
            s.drop_risk, s.refill_days, s.markup_pct, s.provider_id, s.provider_service_id,
-           ps.rate, ps.min_qty, ps.max_qty, ps.type, p.currency
+           ps.rate, ps.min_qty, ps.max_qty, ps.type, ps.name as provider_name, p.currency
       from services s
       join provider_services ps
         on ps.provider_id = s.provider_id and ps.provider_service_id = s.provider_service_id
