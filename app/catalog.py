@@ -85,6 +85,7 @@ KINDS = [
 
 # the provider's own "non drop" / "no drop" claim (test on NFKC text: names use fancy fonts)
 NON_DROP = re.compile(r"\b(non|no)[ -]?drop", re.I)
+NON_DROP_DAYS = re.compile(r"(\d+)\s*(?:days?|d)\s*(?:non|no)[ -]?drop", re.I)   # "30 Days Non Drop"
 
 PH = re.compile(r"phil+ip+in|filipin|pinoy|\bph\b|\U0001F1F5\U0001F1ED", re.I)
 
@@ -213,6 +214,10 @@ def classify(svc: dict):
     title, desc, start, speed = parse_name(FLAG_FOR_REVIEW.sub(" ", clean(raw_name)))
     if flag_note:
         desc = f"{FLAG_NOTE} · {desc}" if desc else FLAG_NOTE
+    nd_days = NON_DROP_DAYS.search(name)
+    if nd_days:   # a time-limited promise: say how long, since the tier alone reads as permanent
+        n = int(nd_days.group(1))
+        desc = f"Non-drop for {n} day{'' if n == 1 else 's'}" + (f" · {desc}" if desc else "")
     if is_comments and "custom" not in title.lower():
         title = f"{title} (custom)"
     api_refill = bool(svc.get("refill"))
