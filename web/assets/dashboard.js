@@ -1,5 +1,5 @@
 import {
-  api, esc, fmtDate, initTheme, num, orderCharge, peso, PLATFORMS, PLATFORM_ORDER, refillText, tierBadge, toast,
+  api, esc, fmtDate, initTheme, num, orderCharge, peso, PLATFORMS, PLATFORM_ORDER, refillText, enhanceSelect, tierBadge, toast,
 } from "./common.js";
 import { icons } from "./icons.js";
 
@@ -211,7 +211,10 @@ function renderSvcList() {
   document.getElementById("svc-list").innerHTML = svcOptionsHTML(shown);
   document.getElementById("svc-hint").textContent = svcHintText(list, shown);
   document.getElementById("svc-cat").disabled = !!state.search.trim();
+  catDropdown?.sync();
 }
+
+let catDropdown = null;
 
 function renderNew() {
   if (!state.services.length) {
@@ -240,7 +243,7 @@ function renderNew() {
         <div class="field">
           <label for="svc-cat">Category</label>
           <select class="input select" id="svc-cat" ${state.search.trim() ? "disabled" : ""}>
-            ${cats.map(([c, n]) => `<option value="${esc(c)}" ${c === state.category ? "selected" : ""}>${esc(categoryLabel(c))} (${num(n)})</option>`).join("")}
+            ${cats.map(([c, n]) => `<option value="${esc(c)}" data-label="${esc(categoryLabel(c))}" data-count="${num(n)}" ${c === state.category ? "selected" : ""}>${esc(categoryLabel(c))} (${num(n)})</option>`).join("")}
           </select>
         </div>
         <div class="field">
@@ -298,10 +301,13 @@ function renderNew() {
 
   view.querySelectorAll("[data-platform]").forEach((b) =>
     b.addEventListener("click", () => { state.platform = b.dataset.platform; state.search = ""; state.category = null; state.serviceId = null; renderNew(); }));
+  catDropdown = enhanceSelect(document.getElementById("svc-cat"));
   document.getElementById("svc-cat").addEventListener("change", (e) => {
     state.category = e.target.value;
     state.serviceId = servicesForPlatform()[0]?.id ?? null;
+    const hadFocus = document.activeElement === catDropdown?.btn;
     renderNew();
+    if (hadFocus) document.getElementById("svc-cat-btn")?.focus();
   });
   document.getElementById("svc-list").addEventListener("click", (e) => {
     const b = e.target.closest("[data-svc]");

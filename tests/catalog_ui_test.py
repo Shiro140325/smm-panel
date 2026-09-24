@@ -58,6 +58,19 @@ async def main():
         check("many platforms offered", await pg.locator("[data-platform]").count() >= 15)
         await pg.screenshot(path=f"{OUT}/cat-new.png", full_page=True)
 
+        # the site's own dropdown, not the browser's
+        await pg.click("#svc-cat-btn")
+        check("custom dropdown opens its own list", await pg.is_visible("#svc-cat-list")
+              and await pg.eval_on_selector("#svc-cat", "e => getComputedStyle(e).opacity") == "0")
+        await pg.click('#svc-cat-list [role="option"]:has(.dd-text:text-is("Followers"))')
+        check("picking an option sets the category", await pg.eval_on_selector("#svc-cat", "e => e.value") == "Followers"
+              and not await pg.is_visible("#svc-cat-list") and "Followers" in await pg.inner_text("#svc-cat-btn"))
+        await pg.focus("#svc-cat-btn")
+        await pg.keyboard.press("ArrowDown")
+        await pg.keyboard.press("Home")
+        await pg.keyboard.press("Enter")
+        check("dropdown works from the keyboard", await pg.eval_on_selector("#svc-cat", "e => e.selectedIndex") == 0
+              and await pg.evaluate("document.activeElement.id") == "svc-cat-btn")
         await pg.select_option("#svc-cat", "Followers")
         cnt = await pg.locator("#svc-list .svc-option").count()
         hint = await pg.inner_text("#order-form .field:nth-of-type(3) .hint")
