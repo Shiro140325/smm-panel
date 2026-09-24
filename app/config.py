@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,13 +17,20 @@ class Settings(BaseSettings):
     paymongo_secret_key: str = ""
     paymongo_webhook_secret: str = ""
 
-    usd_to_php: float = 58.0
+    usd_to_php: float = 62.0          # fallback only; live rate comes from app/fx.py
+    fx_buffer_pct: float = 2.0        # added on top of the live rate for pricing
     topup_min_php: int = 100
     topup_max_php: int = 50000
 
     sync_interval_seconds: int = 180
     sync_enabled: bool = True
     refill_ignore_after_days: int = 5
+
+    @field_validator("base_url", "frontend_origin")
+    @classmethod
+    def _no_trailing_slash(cls, v: str) -> str:
+        # CORS compares origins exactly: "https://x.com/" != "https://x.com"
+        return v.strip().rstrip("/")
 
 
 @lru_cache

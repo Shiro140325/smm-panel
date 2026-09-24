@@ -7,6 +7,7 @@ import json
 import logging
 import time
 
+from app import fx
 from app.config import get_settings
 from app.db import transaction
 from app.providers.smm_client import SMMClient
@@ -139,6 +140,10 @@ async def flag_stuck_orders() -> None:
 
 
 async def run_sync_once() -> None:
+    try:
+        await fx.refresh()          # no-op unless the cached rate is >6h old
+    except Exception:
+        log.exception("fx refresh failed")
     async with transaction() as db:
         providers = await db.fetch_all("select * from providers where active")
     for p in providers:

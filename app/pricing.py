@@ -1,6 +1,6 @@
 import math
 
-from app.config import get_settings
+from app import fx
 
 
 def fx_to_php(currency: str) -> float:
@@ -8,7 +8,7 @@ def fx_to_php(currency: str) -> float:
     if c == "PHP":
         return 1.0
     if c == "USD":
-        return get_settings().usd_to_php
+        return fx.usd_to_php()
     raise ValueError(f"Unsupported provider currency: {currency}")
 
 

@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app import fx
 from app.config import get_settings
 from app.routers import auth, orders, services, topups, webhooks
 from app.workers.sync import run_sync_once
@@ -48,3 +49,8 @@ for r in (auth.router, services.router, orders.router, topups.router, webhooks.r
 @app.get("/health")
 async def health():
     return {"ok": True}
+
+
+@app.get("/fx")
+async def fx_rate():
+    return fx.status()
