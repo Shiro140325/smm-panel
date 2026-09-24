@@ -214,10 +214,6 @@ def classify(svc: dict):
     title, desc, start, speed = parse_name(FLAG_FOR_REVIEW.sub(" ", clean(raw_name)))
     if flag_note:
         desc = f"{FLAG_NOTE} · {desc}" if desc else FLAG_NOTE
-    nd_days = NON_DROP_DAYS.search(name)
-    if nd_days:   # a time-limited promise: say how long, since the tier alone reads as permanent
-        n = int(nd_days.group(1))
-        desc = f"Non-drop for {n} day{'' if n == 1 else 's'}" + (f" · {desc}" if desc else "")
     if is_comments and "custom" not in title.lower():
         title = f"{title} (custom)"
     api_refill = bool(svc.get("refill"))

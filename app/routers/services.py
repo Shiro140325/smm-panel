@@ -4,7 +4,7 @@ import unicodedata
 
 from fastapi import APIRouter, Depends
 
-from app.catalog import NON_DROP
+from app.catalog import NON_DROP, NON_DROP_DAYS
 from app.db import DB, get_db
 from app.pricing import SERVICE_SELECT, price_per_1k_php
 
@@ -16,6 +16,7 @@ _cache: dict[tuple, tuple[float, list]] = {}
 
 
 def _row(r) -> dict:
+    pname = unicodedata.normalize("NFKC", r["provider_name"] or "")   # provider names use fancy fonts
     return {
         "id": r["id"],
         "platform": r["platform"],
@@ -28,7 +29,8 @@ def _row(r) -> dict:
         "speed": r["speed"],
         "drop_risk": r["drop_risk"],
         "refill_days": r["refill_days"],
-        "non_drop": bool(NON_DROP.search(unicodedata.normalize("NFKC", r["provider_name"] or ""))),
+        "non_drop": bool(NON_DROP.search(pname)),
+        "non_drop_days": int(m.group(1)) if (m := NON_DROP_DAYS.search(pname)) else None,   # None = no limit stated
         # frontend: show a comments textarea (one per line) instead of a quantity field
         "custom_comments": (r["type"] or "").strip().lower() == "custom comments",
         "min": r["min_qty"],

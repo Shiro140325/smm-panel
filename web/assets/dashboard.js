@@ -139,8 +139,10 @@ function servicesForPlatform() {
         : (s.category || "Other") === state.category));
 }
 
+const days = (n) => `${num(n)} day${n === 1 ? "" : "s"}`;
+
 function svcSub(s) {
-  return [s.description, s.start_time, refillText(s.refill_days)].filter(Boolean).map(esc).join(" · ");
+  return [s.non_drop_days ? `Non-drop ${days(s.non_drop_days)}` : "", s.description, s.start_time, refillText(s.refill_days)].filter(Boolean).map(esc).join(" · ");
 }
 
 function orderQty(svc) {
@@ -283,6 +285,7 @@ function renderNew() {
             <div><span class="k">Speed</span><span class="v">${esc(svc.speed || "Varies")}</span></div>
             <div><span class="k">Min / max</span><span class="v">${num(svc.min)} / ${num(svc.max)}</span></div>
             <div><span class="k">Refill</span><span class="v">${refillText(svc.refill_days)}</span></div>
+            ${svc.non_drop ? `<div><span class="k">Non-drop</span><span class="v">${svc.non_drop_days ? `${days(svc.non_drop_days)} guaranteed` : "No time limit stated"}</span></div>` : ""}
             ${svc.drop_risk ? `<div><span class="k">Drop risk</span><span class="v">${esc(svc.drop_risk)}</span></div>` : ""}
           </div>
         </div>` : ""}
