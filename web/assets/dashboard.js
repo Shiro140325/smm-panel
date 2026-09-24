@@ -585,7 +585,7 @@ function renderOrders() {
       <label for="order-search" class="sr-only">Search orders</label>
       <input class="input" id="order-search" type="search" placeholder="Search by order # or link" value="${esc(state.ordersQuery)}">
     </div>
-    <div class="card table-card"><div class="table-scroll orders-scroll">
+    <div class="card table-card orders-card"><div class="table-scroll orders-scroll">
       <table class="table orders-table" aria-label="Orders">
         <thead><tr><th>ID</th><th>Date</th><th>Service and link</th><th class="num">Qty</th><th class="num">Remains</th><th class="num">Charge</th><th>Status</th><th>Refill</th></tr></thead>
         <tbody id="orders-body"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>

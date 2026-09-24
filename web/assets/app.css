@@ -326,6 +326,31 @@ section.block h2 { font-size: clamp(30px, 3.4vw, 40px); }
 .orders-table td[data-col="refill"] { white-space: nowrap; }
 .orders-table .svc { font-weight: 600; }
 .orders-table .link { font-size: 13px; color: var(--muted); max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* orders table → cards whenever the card is too narrow for 8 columns (phones, and iPads beside the sidebar) */
+.orders-card { container: orders / inline-size; }
+@media (max-width: 1100px) {
+  .orders-toolbar { flex-direction: column; align-items: stretch; }
+  .orders-toolbar .input { max-width: none; }
+}
+@container orders (max-width: 900px) {
+  .orders-scroll { overflow-x: visible; }
+
+  .orders-table thead { display: none; }
+  .orders-table, .orders-table tbody, .orders-table tr, .orders-table td { display: block; width: 100%; }
+  .orders-table tr { padding: 14px 16px; border-bottom: 1px solid var(--line-2); display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; }
+  .orders-table td { border: 0; padding: 0; }
+  .orders-table td[data-col="svc"] { grid-column: 1 / -1; }
+  .orders-table td[data-col="id"], .orders-table td[data-col="date"] { font-size: 12px; color: var(--muted); }
+  .orders-table td[data-col="date"] { text-align: right; }
+  .orders-table td[data-col="qty"]::before { content: "Qty "; color: var(--muted); }
+  .orders-table td[data-col="remains"]::before { content: "Remains "; color: var(--muted); }
+  .orders-table .num { text-align: left; }
+  .orders-table td[data-col="remains"], .orders-table td[data-col="status"] { text-align: right; }
+  .orders-table td[data-col="charge"] { font-size: 16px; }
+  .orders-table td[data-col="refill"] { grid-column: 1 / -1; }
+  .orders-table td[data-col="refill"]:has(.refill-none) { display: none; }
+  .orders-table .link { max-width: none; }
+}
 .empty { padding: 40px 20px; text-align: center; color: var(--muted); }
 
 .method-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
@@ -381,26 +406,6 @@ section.block h2 { font-size: clamp(30px, 3.4vw, 40px); }
   .svc-list { max-height: 360px; }
 
   .hide-mobile { display: none !important; }
-  .orders-toolbar { flex-direction: column; align-items: stretch; }
-  .orders-toolbar .input { max-width: none; }
-  .orders-scroll { overflow-x: visible; }
-
-  /* orders table → cards */
-  .orders-table thead { display: none; }
-  .orders-table, .orders-table tbody, .orders-table tr, .orders-table td { display: block; width: 100%; }
-  .orders-table tr { padding: 14px 16px; border-bottom: 1px solid var(--line-2); display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; }
-  .orders-table td { border: 0; padding: 0; }
-  .orders-table td[data-col="svc"] { grid-column: 1 / -1; }
-  .orders-table td[data-col="id"], .orders-table td[data-col="date"] { font-size: 12px; color: var(--muted); }
-  .orders-table td[data-col="date"] { text-align: right; }
-  .orders-table td[data-col="qty"]::before { content: "Qty "; color: var(--muted); }
-  .orders-table td[data-col="remains"]::before { content: "Remains "; color: var(--muted); }
-  .orders-table .num { text-align: left; }
-  .orders-table td[data-col="remains"], .orders-table td[data-col="status"] { text-align: right; }
-  .orders-table td[data-col="charge"] { font-size: 16px; }
-  .orders-table td[data-col="refill"] { grid-column: 1 / -1; }
-  .orders-table td[data-col="refill"]:has(.refill-none) { display: none; }
-  .orders-table .link { max-width: none; }
 }
 
 /* Logo */
