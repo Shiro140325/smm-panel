@@ -36,17 +36,26 @@ class OrderIn(BaseModel):
         return v
 
 
+def _is_custom(svc: dict) -> bool:
+    return (svc["type"] or "").strip().lower() == CUSTOM_COMMENTS
+
+
 @router.post("")
 async def create_order(body: OrderIn, user: dict = Depends(current_user)):
+    return await place_order(user["id"], body.service_id, body.link, body.quantity, body.comments)
+
+
+async def place_order(user_id: int, service_id: int, link: str, quantity: int, comments_text: str | None = None) -> dict:
+    """Validate, charge and place one order. Raises HTTPException with a customer-facing message."""
     # 1) validate, price, debit balance, record order — one transaction, user row locked
     async with transaction() as db:
-        svc = await db.fetch_one(SERVICE_SELECT + " and s.id = :id", {"id": body.service_id})
+        svc = await db.fetch_one(SERVICE_SELECT + " and s.id = :id", {"id": service_id})
         if not svc:
             raise HTTPException(404, "Service not found")
 
-        quantity, comments = body.quantity, None
-        if (svc["type"] or "").strip().lower() == CUSTOM_COMMENTS:
-            lines = [ln.strip() for ln in (body.comments or "").splitlines() if ln.strip()]
+        comments = None
+        if _is_custom(svc):
+            lines = [ln.strip() for ln in (comments_text or "").splitlines() if ln.strip()]
             if not lines:
                 raise HTTPException(400, "Enter at least one comment, one per line")
             quantity, comments = len(lines), "\n".join(lines)   # quantity = number of comments
@@ -57,18 +66,18 @@ async def create_order(body: OrderIn, user: dict = Depends(current_user)):
         per_1k = price_per_1k_php(svc["rate"], svc["currency"], svc["markup_pct"])
         price = order_price_php(per_1k, quantity)
 
-        await db.execute("select id from users where id = :u for update", {"u": user["id"]})
-        if await balance_of(db, user["id"]) < price:
+        await db.execute("select id from users where id = :u for update", {"u": user_id})
+        if await balance_of(db, user_id) < price:
             raise HTTPException(402, "Not enough balance")
 
         order = await db.fetch_one("""
             insert into orders (user_id, service_id, provider_id, link, quantity, price_php, comments)
             values (:u, :s, :p, :l, :q, :price, :c) returning id
-        """, {"u": user["id"], "s": svc["id"], "p": svc["provider_id"], "l": body.link,
+        """, {"u": user_id, "s": svc["id"], "p": svc["provider_id"], "l": link,
               "q": quantity, "price": price, "c": comments})
         await db.execute(
             "insert into ledger (user_id, delta, reason, ref) values (:u, :d, 'order', :r)",
-            {"u": user["id"], "d": -price, "r": str(order["id"])},
+            {"u": user_id, "d": -price, "r": str(order["id"])},
         )
         provider = await db.fetch_one("select * from providers where id = :p", {"p": svc["provider_id"]})
 
@@ -76,11 +85,11 @@ async def create_order(body: OrderIn, user: dict = Depends(current_user)):
     try:
         client = SMMClient.for_provider(provider)
         extra = {"comments": comments} if comments else {}
-        provider_order_id = await client.add(svc["provider_service_id"], body.link, quantity, **extra)
+        provider_order_id = await client.add(svc["provider_service_id"], link, quantity, **extra)
     except ProviderError as e:
         # provider rejected it: mark failed and refund in full
         async with transaction() as db:
-            await _fail_and_refund(db, order["id"], user["id"], price)
+            await _fail_and_refund(db, order["id"], user_id, price)
         raise HTTPException(400, f"Order rejected by provider: {e}")
     except Exception:
         # network error/timeout: we can't know whether it was placed — never auto-refund
@@ -99,6 +108,87 @@ async def create_order(body: OrderIn, user: dict = Depends(current_user)):
         """, {"po": provider_order_id, "id": order["id"]})
 
     return {"id": order["id"], "status": "pending", "quantity": quantity, "charge_php": price}
+
+
+# ------------------------------------------------------------------ mass order
+
+MASS_MAX_LINES = 100
+MASS_CONCURRENCY = 5
+
+
+class MassIn(BaseModel):
+    orders: str = Field(max_length=100_000)   # one "service_id|link|quantity" per line
+
+
+def parse_mass(text: str) -> tuple[list[dict], list[dict]]:
+    """→ (rows, errors). Blank lines are skipped; line numbers are 1-based as the user sees them."""
+    rows, errors = [], []
+    for n, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) != 3:
+            errors.append({"line": n, "error": "Use the format service_id|link|quantity"}); continue
+        sid, link, qty = parts
+        if not sid.lstrip("#").isdigit():
+            errors.append({"line": n, "error": f"Service ID must be a number (got “{sid}”)"}); continue
+        if not link.startswith(("https://", "http://")) or len(link) > 500:
+            errors.append({"line": n, "error": "Link must start with https://"}); continue
+        q = qty.replace(",", "")
+        if not q.isdigit() or int(q) <= 0:
+            errors.append({"line": n, "error": f"Quantity must be a whole number (got “{qty}”)"}); continue
+        rows.append({"line": n, "service_id": int(sid.lstrip("#")), "link": link, "quantity": int(q)})
+    return rows, errors
+
+
+@router.post("/mass")
+async def mass_order(body: MassIn, user: dict = Depends(current_user)):
+    rows, errors = parse_mass(body.orders)
+    if not rows and not errors:
+        raise HTTPException(400, "Add at least one order, one per line")
+    if len(rows) + len(errors) > MASS_MAX_LINES:
+        raise HTTPException(400, f"Up to {MASS_MAX_LINES} orders at a time")
+
+    # validate everything up front: nothing is placed if any line is wrong
+    async with transaction() as db:
+        svcs = {r["id"]: r for r in await db.fetch_all(
+            SERVICE_SELECT + " and s.id = ANY(CAST(:ids AS int[]))",
+            {"ids": sorted({r["service_id"] for r in rows}) or [0]})}
+        balance = await balance_of(db, user["id"])
+    total = 0.0
+    for r in rows:
+        svc = svcs.get(r["service_id"])
+        if not svc:
+            errors.append({"line": r["line"], "error": f"Unknown service ID {r['service_id']}"}); continue
+        if _is_custom(svc):
+            errors.append({"line": r["line"], "error": "Custom comments can't be mass ordered. Use New order"}); continue
+        if not svc["min_qty"] <= r["quantity"] <= svc["max_qty"]:
+            errors.append({"line": r["line"], "error": f"Quantity must be between {svc['min_qty']:,} and {svc['max_qty']:,}"}); continue
+        total += order_price_php(price_per_1k_php(svc["rate"], svc["currency"], svc["markup_pct"]), r["quantity"])
+    if errors:
+        errors.sort(key=lambda e: e["line"])
+        shown = "; ".join(f"Line {e['line']}: {e['error']}" for e in errors[:5])
+        more = f" (+{len(errors) - 5} more)" if len(errors) > 5 else ""
+        raise HTTPException(400, shown + more)
+    if round(total, 2) > balance:
+        raise HTTPException(402, f"Not enough balance: these orders cost ₱{total:,.2f}, you have ₱{balance:,.2f}")
+
+    # place them, a few at a time; each order is charged and refunded independently
+    sem = asyncio.Semaphore(MASS_CONCURRENCY)
+
+    async def one(r):
+        async with sem:
+            try:
+                res = await place_order(user["id"], r["service_id"], r["link"], r["quantity"])
+                return {"line": r["line"], "ok": True, "order_id": res["id"], "charge_php": res["charge_php"]}
+            except HTTPException as e:
+                return {"line": r["line"], "ok": False, "error": str(e.detail)}
+
+    results = await asyncio.gather(*(one(r) for r in rows))
+    ok = [r for r in results if r["ok"]]
+    return {"results": results, "placed": len(ok), "failed": len(results) - len(ok),
+            "charged_php": round(sum(r["charge_php"] for r in ok), 2)}
 
 
 async def _fail_and_refund(db, order_id: int, user_id: int, price: float):

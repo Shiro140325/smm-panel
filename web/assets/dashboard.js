@@ -18,6 +18,12 @@ const state = {
   comments: "",
   ack: false,
   placing: false,
+  // mass order
+  massText: "",
+  massAck: false,
+  massPlacing: false,
+  idPlatform: null,
+  idSearch: "",
   // orders
   ordersFilter: "",
   ordersQuery: "",
@@ -51,7 +57,7 @@ async function refreshMe() {
 
 function route() {
   const [name, qs] = location.hash.replace(/^#/, "").split("?");
-  return { name: ["new", "orders", "funds"].includes(name) ? name : "new", params: new URLSearchParams(qs || "") };
+  return { name: ["new", "mass", "orders", "funds"].includes(name) ? name : "new", params: new URLSearchParams(qs || "") };
 }
 
 function render() {
@@ -62,9 +68,17 @@ function render() {
   });
   clearTimeout(state.ordersTimer);
   if (name === "new") renderNew();
+  else if (name === "mass") renderMass();
   else if (name === "orders") renderOrders();
   else renderFunds(params);
   window.scrollTo(0, 0);
+  // balance may have changed elsewhere (top-up credited, refunds): refresh it and re-check the form
+  refreshMe().then(() => {
+    const n = route().name;
+    if (n === "new") updateCharge();
+    else if (n === "mass") updateMass();
+    else if (n === "funds") updateFunds();
+  }).catch(() => {});
 }
 
 window.addEventListener("hashchange", render);
@@ -151,7 +165,7 @@ function renderNew() {
           <div class="svc-list" id="svc-list" role="group" aria-label="Services">
             ${list.length ? list.map((s) => `
               <button type="button" class="svc-option" data-svc="${s.id}" aria-pressed="${s.id === state.serviceId}">
-                <span class="grow"><span class="t">${esc(s.name)}</span><span class="s">${esc(s.start_time || "")}${s.start_time ? " · " : ""}${refillText(s.refill_days)}</span></span>
+                <span class="grow"><span class="t">${esc(s.name)}</span><span class="s"><span class="mono">ID ${s.id}</span> · ${esc(s.start_time || "")}${s.start_time ? " · " : ""}${refillText(s.refill_days)}</span></span>
                 ${tierBadge(s.tier)}
                 <span class="p">${peso(s.price_per_1k_php)}<span class="muted" style="font-weight:500"> /1K</span></span>
               </button>`).join("") : `<div class="empty">No services match "${esc(state.search)}".</div>`}
@@ -187,6 +201,7 @@ function renderNew() {
           <div style="display:flex;align-items:center;gap:10px"><h3>${esc(svc.name)}</h3>${tierBadge(svc.tier)}</div>
           ${svc.description ? `<p style="color:var(--ink-2);font-size:15px">${esc(svc.description)}</p>` : ""}
           <div class="kv">
+            <div><span class="k">Service ID</span><span class="v mono">${svc.id}</span></div>
             <div><span class="k">Price</span><span class="v">${peso(svc.price_per_1k_php)} / 1,000</span></div>
             <div><span class="k">Starts</span><span class="v">${esc(svc.start_time || "Varies")}</span></div>
             <div><span class="k">Speed</span><span class="v">${esc(svc.speed || "Varies")}</span></div>
@@ -242,6 +257,179 @@ async function placeOrder(e) {
   } finally {
     state.placing = false;
     if (route().name === "new") updateCharge();
+  }
+}
+
+/* ----------------------------------------------------------- mass order */
+
+const MASS_MAX = 100;
+
+/** Mirrors the server's parser/validation so problems show up while typing. */
+function parseMass(text) {
+  const byId = new Map(state.services.map((s) => [s.id, s]));
+  const rows = [];
+  text.split("\n").forEach((raw, i) => {
+    const line = raw.trim();
+    if (!line) return;
+    const r = { line: i + 1, raw: line };
+    const parts = line.split("|").map((x) => x.trim());
+    if (parts.length !== 3) { r.error = "Use service_id|link|quantity"; rows.push(r); return; }
+    const [sid, link, qty] = parts;
+    r.link = link;
+    const id = Number(sid.replace(/^#/, ""));
+    const q = Number(qty.replace(/,/g, ""));
+    r.quantity = q;
+    r.svc = byId.get(id);
+    if (!/^\d+$/.test(sid.replace(/^#/, ""))) r.error = "Service ID must be a number";
+    else if (!r.svc) r.error = `Unknown service ID ${id}`;
+    else if (r.svc.custom_comments) r.error = "Custom comments: use New order";
+    else if (!/^https?:\/\/\S+$/i.test(link)) r.error = "Link must start with https://";
+    else if (!/^\d+$/.test(qty.replace(/,/g, "")) || q <= 0) r.error = "Quantity must be a whole number";
+    else if (q < r.svc.min || q > r.svc.max) r.error = `Quantity must be ${num(r.svc.min)}–${num(r.svc.max)}`;
+    else r.charge = orderCharge(r.svc.price_per_1k_php, q);
+    rows.push(r);
+  });
+  return rows;
+}
+
+function updateMass() {
+  if (!document.getElementById("mass-body")) return;
+  const rows = parseMass(state.massText);
+  const bad = rows.filter((r) => r.error);
+  const total = rows.reduce((t, r) => t + (r.charge || 0), 0);
+  const tbody = document.getElementById("mass-body");
+  document.getElementById("mass-preview").classList.toggle("hidden", !rows.length);
+  tbody.innerHTML = rows.map((r) => `<tr class="${r.error ? "bad" : ""}">
+      <td class="mono muted">${r.line}</td>
+      <td>${r.svc ? `<span style="font-weight:600">${esc(r.svc.name)}</span> ${tierBadge(r.svc.tier)}` : `<span class="muted">Unknown service</span>`}
+        <div class="link">${esc(r.link || r.raw)}</div></td>
+      <td class="num">${r.quantity && !Number.isNaN(r.quantity) ? num(r.quantity) : "–"}</td>
+      <td class="num">${r.error ? "–" : `<strong>${peso(r.charge)}</strong>`}</td>
+    </tr>${r.error ? `<tr class="bad err-row"><td></td><td colspan="3" class="err">${esc(r.error)}</td></tr>` : ""}`).join("");
+  document.getElementById("mass-total").textContent = peso(total);
+  document.getElementById("mass-count").textContent = rows.length ? `${rows.length} order${rows.length === 1 ? "" : "s"}` : "No orders yet";
+  const msg = document.getElementById("mass-msg");
+  let problem = null;
+  if (!rows.length) problem = "empty";
+  else if (rows.length > MASS_MAX) problem = `Up to ${MASS_MAX} orders at a time`;
+  else if (bad.length) problem = `Fix ${bad.length} line${bad.length === 1 ? "" : "s"} marked in red`;
+  else if (state.user && total > state.user.balance_php) problem = "low-balance";
+  else if (!state.massAck) problem = "Tick the box to confirm";
+  msg.innerHTML = problem === "low-balance"
+    ? `<a href="#funds" style="font-weight:600;color:var(--bad)">Not enough balance. Add funds</a>`
+    : problem && problem !== "empty" ? `<span class="hint error">${esc(problem)}</span>` : "";
+  const btn = document.getElementById("mass-place");
+  btn.disabled = !!problem || state.massPlacing;
+  btn.textContent = state.massPlacing ? "Placing orders…" : rows.length > 1 ? `Place ${rows.length} orders` : "Place order";
+}
+
+function renderIdList() {
+  const el = document.getElementById("id-list");
+  if (!el) return;
+  const q = state.idSearch.trim().toLowerCase();
+  const list = state.services.filter((s) => s.platform === state.idPlatform
+    && (!q || `${s.id} ${s.name} ${s.tier}`.toLowerCase().includes(q)));
+  el.innerHTML = list.length ? list.map((s) => `
+    <button type="button" class="id-row" data-add="${s.id}" title="Add a line for service ${s.id}">
+      <span class="id">${s.id}</span>
+      <span class="n">${esc(s.name)} ${tierBadge(s.tier)}${s.custom_comments ? ` <span class="hint">(New order only)</span>` : ""}</span>
+      <span class="p">${peso(s.price_per_1k_php)}</span>
+    </button>`).join("") : `<p class="hint" style="padding:8px 6px">No matches.</p>`;
+  el.querySelectorAll("[data-add]").forEach((b) => b.addEventListener("click", () => {
+    const ta = document.getElementById("mass-input");
+    const prefix = ta.value && !ta.value.endsWith("\n") ? "\n" : "";
+    ta.value += `${prefix}${b.dataset.add}|`;
+    state.massText = ta.value;
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    updateMass();
+  }));
+}
+
+function renderMass() {
+  const platforms = PLATFORM_ORDER.filter((p) => state.services.some((s) => s.platform === p));
+  if (!platforms.includes(state.idPlatform)) state.idPlatform = platforms[0];
+  view.innerHTML = `
+    <div class="page-head"><h1>Mass order</h1><a href="#new" style="font-weight:600;text-decoration:none">Single order</a></div>
+    <div class="two-col">
+      <form class="card panel primary" id="mass-form" novalidate>
+        <div class="field">
+          <label for="mass-input">Orders <span class="muted" style="font-weight:500">(one per line)</span></label>
+          <textarea class="textarea mass-input" id="mass-input" spellcheck="false" autocapitalize="off" autocomplete="off"
+            placeholder="service_id|link|quantity&#10;22|https://www.tiktok.com/@yourpage|1000&#10;1|https://www.facebook.com/yourpage/posts/123|500">${esc(state.massText)}</textarea>
+          <span class="hint">Format: <span class="mono">service_id|link|quantity</span>. Up to ${MASS_MAX} lines. Find IDs in the list${window.innerWidth > 980 ? " on the right" : " below"}. Tap one to start a line.</span>
+        </div>
+        <div class="card table-card hidden" id="mass-preview" style="border-radius:12px"><div class="table-scroll">
+          <table class="table mass-preview" aria-label="Order preview">
+            <thead><tr><th>Line</th><th>Service and link</th><th class="num">Qty</th><th class="num">Charge</th></tr></thead>
+            <tbody id="mass-body"></tbody>
+          </table>
+        </div></div>
+        <div class="charge-box">
+          <div style="flex:1"><div class="k" id="mass-count">No orders yet</div><div class="v" id="mass-total">₱0.00</div></div>
+          <div id="mass-msg"></div>
+        </div>
+        <label class="check"><input type="checkbox" id="mass-ack" ${state.massAck ? "checked" : ""}>
+          <span>I understand these services may go against the platforms' rules and that some drop-off can happen outside the refill terms.</span></label>
+        <button class="btn btn-primary btn-lg btn-block" id="mass-place" type="submit" disabled>Place order</button>
+        <div id="mass-results"></div>
+      </form>
+      <div class="aside">
+        <div class="card details">
+          <h3>Service IDs</h3>
+          <div class="pill-row" role="group" aria-label="Platform">
+            ${platforms.map((p) => `<button type="button" class="pill" data-idp="${p}" aria-pressed="${p === state.idPlatform}">${esc(PLATFORMS[p] || p)}</button>`).join("")}
+          </div>
+          <label for="id-search" class="sr-only">Search services</label>
+          <input class="input" id="id-search" type="search" placeholder="Search by name or ID" value="${esc(state.idSearch)}">
+          <div class="id-list" id="id-list"></div>
+        </div>
+      </div>
+    </div>`;
+
+  const ta = document.getElementById("mass-input");
+  ta.addEventListener("input", () => { state.massText = ta.value; updateMass(); });
+  document.getElementById("mass-ack").addEventListener("change", (e) => { state.massAck = e.target.checked; updateMass(); });
+  view.querySelectorAll("[data-idp]").forEach((b) => b.addEventListener("click", () => {
+    state.idPlatform = b.dataset.idp;
+    view.querySelectorAll("[data-idp]").forEach((x) => x.setAttribute("aria-pressed", x === b));
+    renderIdList();
+  }));
+  document.getElementById("id-search").addEventListener("input", (e) => { state.idSearch = e.target.value; renderIdList(); });
+  document.getElementById("mass-form").addEventListener("submit", placeMass);
+  renderIdList();
+  updateMass();
+}
+
+async function placeMass(e) {
+  e.preventDefault();
+  if (state.massPlacing) return;
+  state.massPlacing = true;
+  updateMass();
+  const out = document.getElementById("mass-results");
+  try {
+    const res = await api("/orders/mass", { method: "POST", body: { orders: state.massText } });
+    const failed = res.results.filter((r) => !r.ok);
+    const lines = state.massText.split("\n");
+    // keep only the lines that failed, so they can be fixed and resubmitted
+    state.massText = failed.map((r) => lines[r.line - 1]).join("\n");
+    document.getElementById("mass-input").value = state.massText;
+    state.massAck = false;
+    document.getElementById("mass-ack").checked = false;
+    out.innerHTML = `
+      <div class="alert ${failed.length ? "alert-warn" : "alert-ok"}" role="status" style="flex-direction:column;gap:6px">
+        <strong>Placed ${res.placed} of ${res.results.length} order${res.results.length === 1 ? "" : "s"} · ${peso(res.charged_php)} charged</strong>
+        ${failed.length ? `<span>These lines weren't placed and are still in the box above:</span>
+          <ul style="margin:0;padding-left:18px">${failed.map((r) => `<li>Line ${r.line}: ${esc(r.error)}</li>`).join("")}</ul>` : ""}
+        <a href="#orders" style="font-weight:600">View orders</a>
+      </div>`;
+    toast(`Placed ${res.placed} order${res.placed === 1 ? "" : "s"}`);
+  } catch (ex) {
+    out.innerHTML = `<div class="alert alert-bad" role="alert">${esc(ex.message)}</div>`;
+  } finally {
+    await refreshMe().catch(() => {});
+    state.massPlacing = false;
+    if (route().name === "mass") updateMass();
   }
 }
 
@@ -375,6 +563,7 @@ function amountValue() {
 }
 
 function updateFunds() {
+  if (!document.getElementById("sum-pay")) return;
   const amt = amountValue();
   const ok = amt >= TOPUP_MIN && amt <= TOPUP_MAX;
   document.getElementById("sum-pay").textContent = peso(ok ? amt : 0);

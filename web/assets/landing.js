@@ -27,6 +27,7 @@ function renderTable() {
     ? rows
         .map(
           (s) => `<tr>
+            <td class="mono muted">${s.id}</td>
             <td style="font-weight:600">${esc(s.name)}</td>
             <td>${tierBadge(s.tier)}</td>
             <td class="num" style="font-weight:700">${peso(s.price_per_1k_php)}</td>
@@ -35,7 +36,7 @@ function renderTable() {
           </tr>`,
         )
         .join("")
-    : `<tr><td colspan="5" class="muted">No services yet.</td></tr>`;
+    : `<tr><td colspan="6" class="muted">No services yet.</td></tr>`;
 }
 
 function renderHero() {
@@ -68,7 +69,7 @@ function renderHero() {
   try {
     services = await api("/services");
   } catch (e) {
-    document.getElementById("price-body").innerHTML = `<tr><td colspan="5" class="muted">Couldn't load prices right now.</td></tr>`;
+    document.getElementById("price-body").innerHTML = `<tr><td colspan="6" class="muted">Couldn't load prices right now.</td></tr>`;
     document.getElementById("hero-card").innerHTML = "";
     return;
   }

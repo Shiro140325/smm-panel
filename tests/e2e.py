@@ -226,6 +226,28 @@ async def main():
     check("orders list is live (in_progress, remains 40)", st["status"] == "in_progress" and st["remains"] == 40, st)
     await m3.aclose()
 
+    # --- mass order
+    async def n_orders():
+        return (await sql("select count(*) n from orders where user_id = :u", {"u": me["id"]}))[0]["n"]
+    before = await n_orders()
+    r = await c.post("/orders/mass", json={"orders": "1|https://tiktok.com/@a|1000\n2|tiktok.com/@b|500\n99|https://x.com/c|100"})
+    check("mass: invalid lines → 400 listing lines, nothing placed",
+          r.status_code == 400 and "Line 2" in r.text and "Line 3" in r.text and await n_orders() == before, r.text)
+    r = await c.post("/orders/mass", json={"orders": "3|https://instagram.com/p/x|5"})
+    check("mass: custom comments rejected", r.status_code == 400 and "Custom comments" in r.text, r.text)
+    r = await c.post("/orders/mass", json={"orders": "2|https://tiktok.com/@a|20000\n2|https://tiktok.com/@b|20000"})
+    check("mass: total over balance → 402, nothing placed", r.status_code == 402 and await n_orders() == before, r.text)
+    bal_a = (await c.get("/auth/me")).json()["balance_php"]
+    text = "1|https://tiktok.com/@m1|100\n\n  #1 | https://tiktok.com/@m2 | 1,000 \n1|https://tiktok.com/@reject|200"
+    r = await c.post("/orders/mass", json={"orders": text})
+    j = r.json()
+    res = {x["line"]: x for x in j.get("results", [])}
+    bal_b = (await c.get("/auth/me")).json()["balance_php"]
+    # 1: 100 x 52.20/1K = 5.22 ; 3: 1000 → 52.20 ; 4: rejected by provider → refunded
+    check("mass: 2 placed, provider rejection fails only its line",
+          r.status_code == 200 and j["placed"] == 2 and j["failed"] == 1 and res[1]["ok"] and res[3]["ok"] and not res[4]["ok"], j)
+    check("mass: charged only placed lines (57.42)", j.get("charged_php") == 57.42 and round(bal_a - bal_b, 2) == 57.42, (j.get("charged_php"), bal_a, bal_b))
+
     # --- other user can't touch my order
     await c2.post("/auth/register", json={"email": "other@example.com", "password": "password123"})
     r = await c2.post(f"/orders/{o_hq['id']}/refill")
