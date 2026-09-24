@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Log in — SMM Shiro</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Figtree:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<main class="auth-page">
+  <div class="card auth-card">
+    <a class="brand" href="/" style="text-align:center">SMM<span>Shiro</span></a>
+    <div class="tabs" role="tablist" aria-label="Account">
+      <button type="button" role="tab" id="tab-login" aria-selected="true">Log in</button>
+      <button type="button" role="tab" id="tab-register" aria-selected="false">Create account</button>
+    </div>
+    <form id="auth-form" novalidate style="display:flex;flex-direction:column;gap:16px">
+      <div class="field">
+        <label for="email">Email</label>
+        <input class="input" id="email" type="email" autocomplete="email" required>
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input class="input" id="password" type="password" autocomplete="current-password" minlength="8" required>
+        <span class="hint" id="pw-hint">At least 8 characters.</span>
+      </div>
+      <div class="alert alert-bad hidden" id="auth-error" role="alert"></div>
+      <button class="btn btn-primary btn-lg btn-block" id="submit" type="submit">Log in</button>
+    </form>
+    <p class="hint" style="text-align:center">By continuing you agree to the <a href="#">Terms of service</a>.</p>
+  </div>
+</main>
+<script type="module">
+  import { api } from "/assets/common.js";
+
+  const params = new URLSearchParams(location.search);
+  let mode = params.get("mode") === "register" ? "register" : "login";
+  const $ = (id) => document.getElementById(id);
+
+  function setMode(m) {
+    mode = m;
+    $("tab-login").setAttribute("aria-selected", m === "login");
+    $("tab-register").setAttribute("aria-selected", m === "register");
+    $("submit").textContent = m === "login" ? "Log in" : "Create account";
+    $("password").autocomplete = m === "login" ? "current-password" : "new-password";
+    $("pw-hint").classList.toggle("hidden", m === "login");
+    $("auth-error").classList.add("hidden");
+    document.title = (m === "login" ? "Log in" : "Create account") + " — SMM Shiro";
+  }
+  $("tab-login").onclick = () => setMode("login");
+  $("tab-register").onclick = () => setMode("register");
+  setMode(mode);
+
+  // already logged in? go straight to the dashboard
+  api("/auth/me").then(() => location.replace("/dashboard/")).catch(() => {});
+
+  $("auth-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = $("email").value.trim();
+    const password = $("password").value;
+    const err = $("auth-error");
+    err.classList.add("hidden");
+    if (!email || !password) { err.textContent = "Enter your email and password."; err.classList.remove("hidden"); return; }
+    if (mode === "register" && password.length < 8) { err.textContent = "Password must be at least 8 characters."; err.classList.remove("hidden"); return; }
+    $("submit").disabled = true;
+    try {
+      await api(mode === "login" ? "/auth/login" : "/auth/register", { method: "POST", body: { email, password } });
+      location.replace("/dashboard/");
+    } catch (ex) {
+      err.textContent = ex.message;
+      err.classList.remove("hidden");
+      $("submit").disabled = false;
+    }
+  });
+</script>
+</body>
+</html>

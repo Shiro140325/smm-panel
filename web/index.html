@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SMM Shiro — Social media growth, clearly labeled</title>
+<meta name="description" content="Followers, likes and views for TikTok, Facebook, Instagram and YouTube. Every service labeled by quality, with refill terms shown before you pay. Top up with GCash or Maya.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Figtree:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap">
+    <a class="brand" href="/">SMM<span>Shiro</span></a>
+    <nav class="site-nav" aria-label="Main">
+      <a href="#services">Services</a>
+      <a href="#quality">Service quality</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <div class="header-actions">
+      <a class="btn btn-ghost" href="/login/">Log in</a>
+      <a class="btn btn-primary" href="/login/?mode=register">Create account</a>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wrap">
+      <div>
+        <span class="eyebrow">For Filipino creators, sellers and resellers</span>
+        <h1>Grow your pages. Know exactly what you're buying.</h1>
+        <p class="lead">Followers, likes and views for TikTok, Facebook, Instagram and YouTube. Every service is labeled by quality, with its start time, drop risk and refill terms shown before you pay.</p>
+        <div class="hero-cta">
+          <a class="btn btn-primary btn-lg" href="/login/?mode=register">Create free account</a>
+          <a class="btn btn-secondary btn-lg" href="#pricing">See services and prices</a>
+        </div>
+        <div class="pay-row"><span>Top up with</span><span class="pay-chip">GCash</span><span class="pay-chip">Maya</span></div>
+      </div>
+      <div class="card hero-card" id="hero-card" aria-label="Sample services">
+        <div class="svc-row"><div class="grow"><div class="t">Loading services…</div></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="services" style="padding-top:0">
+    <div class="wrap">
+      <div class="section-head"><h2>How it works</h2></div>
+      <div class="grid-3">
+        <div class="card step"><div class="n">01</div><h3>Top up your wallet</h3><p>Pay with GCash or Maya through PayMongo's secure checkout. Your balance updates automatically.</p></div>
+        <div class="card step"><div class="n">02</div><h3>Paste a link, pick a service</h3><p>Choose the quality tier and quantity. You see the exact charge, start time and refill terms before you confirm.</p></div>
+        <div class="card step"><div class="n">03</div><h3>Track it, refill if it drops</h3><p>Follow progress in your dashboard. Undelivered amounts go back to your balance, and refill-covered orders can be topped back up.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block dark-band" id="quality">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Every service tells you what it is.</h2>
+        <p>No "real followers" labels on bot services. Pick the tier that fits your budget and how much risk you're comfortable with.</p>
+      </div>
+      <div class="grid-3">
+        <div class="tier-card"><span class="badge badge-basic" style="align-self:flex-start">Basic</span><p>Automated or low-activity accounts. Fastest and cheapest, but drops are likely.</p>
+          <div class="kv"><div><span class="k">Drop risk</span><span class="v">High</span></div><div><span class="k">Refill</span><span class="v">None</span></div><div><span class="k">Good for</span><span class="v">Quick social proof</span></div></div></div>
+        <div class="tier-card"><span class="badge badge-hq" style="align-self:flex-start">HQ</span><p>Better-quality accounts. Some drop-off is normal and covered by refill.</p>
+          <div class="kv"><div><span class="k">Drop risk</span><span class="v">Moderate</span></div><div><span class="k">Refill</span><span class="v">7–30 days</span></div><div><span class="k">Good for</span><span class="v">Steady growth</span></div></div></div>
+        <div class="tier-card"><span class="badge badge-ph" style="align-self:flex-start">Real · PH</span><p>Philippine accounts, for local shops and pages. Slower delivery, higher price.</p>
+          <div class="kv"><div><span class="k">Audience</span><span class="v">Philippines</span></div><div><span class="k">Speed</span><span class="v">Gradual</span></div><div><span class="k">Good for</span><span class="v">Local shops and pages</span></div></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="pricing">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Services and prices</h2>
+        <p>Prices per 1,000. No subscriptions: you only pay for what you order.</p>
+      </div>
+      <div class="price-tabs pill-row" id="price-tabs" role="group" aria-label="Platform"></div>
+      <div class="card table-card"><div class="table-scroll">
+        <table class="table" aria-label="Prices">
+          <thead><tr><th>Service</th><th>Quality</th><th class="num">Per 1,000</th><th>Min / max</th><th>Refill</th></tr></thead>
+          <tbody id="price-body"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+        </table>
+      </div></div>
+    </div>
+  </section>
+
+  <section class="block" style="padding-top:0">
+    <div class="wrap">
+      <div class="card notice">
+        <span style="color:var(--warn);margin-top:2px" id="warn-icon"></span>
+        <div>
+          <h3>Before you order</h3>
+          <p>Buying engagement can go against the rules of TikTok, Facebook, Instagram and YouTube. Platforms may remove delivered engagement or restrict accounts, and you order at your own risk. We'll always tell you what a service is, how fast it starts and whether refill covers it.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block faq" id="faq" style="padding-top:0">
+    <div class="wrap" style="max-width:820px">
+      <div class="section-head"><h2>FAQ</h2></div>
+      <details><summary>How do I pay?</summary><p>Top up your wallet with GCash or Maya. You'll finish paying on PayMongo's secure checkout, and your balance updates automatically once the payment is confirmed.</p></details>
+      <details><summary>What happens if my order doesn't fully deliver?</summary><p>If an order ends up partial or canceled, the undelivered part is refunded to your wallet balance automatically.</p></details>
+      <details><summary>What does refill mean?</summary><p>Some services lose part of what was delivered over time. On services with refill, you can request a top-up of what dropped from your Orders page, within the refill period after the order completes.</p></details>
+      <details><summary>Do you need my password?</summary><p>Never. We only need the public link to your profile, post or video. Keep your account public while the order runs.</p></details>
+      <details><summary>How long until my order starts?</summary><p>Each service shows its usual start time before you order. Most start within minutes to a few hours.</p></details>
+    </div>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div class="wrap">
+    <div class="footer-col" style="flex:1;min-width:240px">
+      <span class="brand">SMM<span>Shiro</span></span>
+      <span>DTI Reg. No. [DTI NO.] · TIN [TIN]</span>
+      <span>support@smmshiro.com</span>
+      <span style="font-size:13px;color:var(--dark-muted)">© 2026 SMM Shiro. Not affiliated with TikTok, Meta, Google or X.</span>
+    </div>
+    <nav class="footer-col" aria-label="Footer">
+      <a href="#pricing">Services</a><a href="#faq">FAQ</a><a href="/login/">Log in</a>
+    </nav>
+    <nav class="footer-col" aria-label="Legal">
+      <a href="#">Terms of service</a><a href="#">Refund and refill policy</a><a href="#">Privacy policy</a>
+    </nav>
+  </div>
+</footer>
+
+<script type="module" src="/assets/landing.js"></script>
+</body>
+</html>

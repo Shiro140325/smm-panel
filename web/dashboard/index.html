@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dashboard — SMM Shiro</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<div class="app">
+  <!-- mobile top bar -->
+  <header class="topbar">
+    <a class="brand" href="/">SMM<span style="color:#8FA4FF">Shiro</span></a>
+    <span class="bal" data-balance>₱0.00</span>
+    <button class="icon-btn" type="button" data-logout aria-label="Log out"></button>
+  </header>
+
+  <!-- desktop sidebar -->
+  <aside class="sidebar">
+    <a class="brand" href="/">SMM<span style="color:#8FA4FF">Shiro</span></a>
+    <div class="balance-card">
+      <div class="k">Balance</div>
+      <div class="v" data-balance>₱0.00</div>
+      <a class="btn btn-primary" href="#funds">Add funds</a>
+    </div>
+    <nav class="side-nav" aria-label="Dashboard">
+      <a href="#new" data-nav="new"><span data-icon="plus"></span>New order</a>
+      <a href="#orders" data-nav="orders"><span data-icon="list"></span>Orders</a>
+      <a href="#funds" data-nav="funds"><span data-icon="wallet"></span>Add funds</a>
+    </nav>
+    <div class="side-user">
+      <div class="avatar" id="avatar" aria-hidden="true">?</div>
+      <div class="email" id="user-email"></div>
+      <button class="icon-btn" type="button" data-logout aria-label="Log out"></button>
+    </div>
+  </aside>
+
+  <main class="main" id="view" aria-live="polite"></main>
+
+  <!-- mobile bottom tabs -->
+  <nav class="tabbar" aria-label="Dashboard">
+    <a href="#new" data-nav="new"><span data-icon="plus"></span>New order</a>
+    <a href="#orders" data-nav="orders"><span data-icon="list"></span>Orders</a>
+    <a href="#funds" data-nav="funds"><span data-icon="wallet"></span>Add funds</a>
+  </nav>
+</div>
+<script type="module" src="/assets/dashboard.js"></script>
+</body>
+</html>

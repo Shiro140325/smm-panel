@@ -40,8 +40,8 @@ async def create_topup(body: TopupIn, user: dict = Depends(current_user)):
         "reference_number": topup_id,
         "description": f"Wallet top-up ₱{body.amount_php:,}",
         "metadata": {"topup_id": topup_id},
-        "success_url": f"{s.frontend_origin}/funds?status=success&topup={topup_id}",
-        "cancel_url": f"{s.frontend_origin}/funds?status=cancel",
+        "success_url": f"{s.frontend_origin}/dashboard/#funds?status=success&topup={topup_id}",
+        "cancel_url": f"{s.frontend_origin}/dashboard/#funds?status=cancel",
     }}}
     async with httpx.AsyncClient(auth=(s.paymongo_secret_key, ""), timeout=30) as c:
         r = await c.post(f"{PAYMONGO_API}/checkout_sessions", json=payload)
