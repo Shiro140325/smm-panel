@@ -25,13 +25,14 @@ CATALOG_EVERY_SECONDS = 6 * 3600
 _last_catalog_sync: dict[int, float] = {}
 
 
-async def sync_orders(client: SMMClient, provider_id: int) -> int:
+async def sync_orders(client: SMMClient, provider_id: int, user_id: int | None = None) -> int:
     async with transaction() as db:
         rows = await db.fetch_all("""
             select id, provider_order_id from orders
              where provider_id = :p and status in ('pending', 'in_progress')
                and provider_order_id is not null
-        """, {"p": provider_id})
+               and (CAST(:u AS bigint) is null or user_id = CAST(:u AS bigint))
+        """, {"p": provider_id, "u": user_id})
     if not rows:
         return 0
     by_pid = {str(r["provider_order_id"]): r["id"] for r in rows}
@@ -159,6 +160,22 @@ async def flag_stuck_orders() -> None:
             update orders set status = 'needs_review', updated_at = now()
              where status = 'creating' and created_at < now() - interval '10 minutes'
         """)
+
+
+async def sync_user_orders(user_id: int) -> int:
+    """On-demand refresh of one customer's open orders (called when they view Orders)."""
+    async with transaction() as db:
+        providers = await db.fetch_all("""
+            select distinct p.* from providers p join orders o on o.provider_id = p.id
+             where p.active and o.user_id = :u and o.status in ('pending', 'in_progress')
+        """, {"u": user_id})
+    n = 0
+    for p in providers:
+        try:
+            n += await sync_orders(SMMClient.for_provider(p), p["id"], user_id=user_id)
+        except Exception:
+            log.exception("on-demand sync for user %s / %s failed", user_id, p["name"])
+    return n
 
 
 async def run_sync_once() -> None:

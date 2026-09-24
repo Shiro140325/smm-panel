@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -8,6 +10,7 @@ from app.db import transaction
 from app.pricing import SERVICE_SELECT, order_price_php, price_per_1k_php
 from app.providers.smm_client import ProviderError, SMMClient
 from app.security import balance_of, current_user
+from app.workers.sync import sync_user_orders
 
 log = logging.getLogger("orders")
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -108,9 +111,27 @@ async def _fail_and_refund(db, order_id: int, user_id: int, price: float):
     """, {"u": user_id, "d": price, "r": str(order_id)})
 
 
+_last_live_sync: dict[int, float] = {}
+LIVE_SYNC_EVERY = 10.0      # seconds, per user
+
+
+async def _live_sync(user_id: int) -> None:
+    """Pull fresh statuses for this user's open orders from the provider, at most every 10s,
+    without making the page wait more than a few seconds."""
+    now = time.monotonic()
+    if now - _last_live_sync.get(user_id, 0) < LIVE_SYNC_EVERY:
+        return
+    _last_live_sync[user_id] = now
+    try:
+        await asyncio.wait_for(sync_user_orders(user_id), timeout=6)
+    except Exception:
+        log.warning("live sync for user %s skipped", user_id, exc_info=True)
+
+
 @router.get("")
 async def list_orders(status: str | None = None, q: str | None = None,
                       limit: int = 50, offset: int = 0, user: dict = Depends(current_user)):
+    await _live_sync(user["id"])
     limit = max(1, min(limit, 100))
     where = ["o.user_id = :u"]
     params: dict = {"u": user["id"], "lim": limit, "off": offset}

@@ -215,6 +215,17 @@ async def main():
     check("other user can't check my top-up", r.status_code in (401, 404), r.text)
     await m2.aclose()
 
+    # --- live status: GET /orders pulls fresh provider status (no background sync)
+    r = await c.post("/orders", json={"service_id": 1, "link": "https://tiktok.com/@live", "quantity": 100})
+    live_id = r.json()["id"]
+    po = (await sql("select provider_order_id from orders where id = :i", {"i": live_id}))[0]["provider_order_id"]
+    m3 = httpx.AsyncClient(base_url=MOCK)
+    await m3.post("/_set_order", data={"oid": str(po), "status": "In progress", "remains": "40"})
+    await asyncio.sleep(10.5)   # past the per-user throttle
+    st = {o["id"]: o for o in (await c.get("/orders")).json()}[live_id]
+    check("orders list is live (in_progress, remains 40)", st["status"] == "in_progress" and st["remains"] == 40, st)
+    await m3.aclose()
+
     # --- other user can't touch my order
     await c2.post("/auth/register", json={"email": "other@example.com", "password": "password123"})
     r = await c2.post(f"/orders/{o_hq['id']}/refill")

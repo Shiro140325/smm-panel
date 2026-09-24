@@ -58,7 +58,7 @@ function render() {
     if (a.dataset.nav === name) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   });
-  clearInterval(state.ordersTimer);
+  clearTimeout(state.ordersTimer);
   if (name === "new") renderNew();
   else if (name === "orders") renderOrders();
   else renderFunds(params);
@@ -277,11 +277,13 @@ async function loadOrders() {
     orders = await api("/orders" + (qs.toString() ? `?${qs}` : ""));
   } catch (ex) {
     tbody.innerHTML = `<tr><td colspan="8" class="empty">${esc(ex.message)}</td></tr>`;
-    return;
+    return null;
   }
+  const stamp = document.getElementById("orders-updated");
+  if (stamp) stamp.textContent = `Updated ${new Date().toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", second: "2-digit" })}`;
   if (!orders.length) {
     tbody.innerHTML = `<tr><td colspan="8" class="empty">${state.ordersFilter || state.ordersQuery ? "No orders match." : `No orders yet. <a href="#new">Place your first order</a>.`}</td></tr>`;
-    return;
+    return orders;
   }
   tbody.innerHTML = orders.map((o) => {
     const [label, cls] = STATUS[o.status] || [o.status, "badge-pending"];
@@ -306,6 +308,20 @@ async function loadOrders() {
     }
     loadOrders();
   }));
+  return orders;
+}
+
+const OPEN = ["creating", "pending", "in_progress"];
+
+function scheduleOrders(delay) {
+  clearTimeout(state.ordersTimer);
+  state.ordersTimer = setTimeout(async () => {
+    if (route().name !== "orders") return;
+    const list = await loadOrders();
+    refreshMe().catch(() => {});
+    // poll fast while something is still running, slower otherwise
+    scheduleOrders(list && list.some((o) => OPEN.includes(o.status)) ? 10000 : 30000);
+  }, delay);
 }
 
 function renderOrders() {
@@ -328,7 +344,7 @@ function renderOrders() {
         <tbody id="orders-body"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
       </table>
     </div></div>
-    <p class="hint">Refill is available after an order completes, for the period shown on the service. Undelivered amounts are refunded to your balance automatically.</p>`;
+    <p class="hint"><span id="orders-updated"></span> · Running orders update every 10 seconds. Refill is available after an order completes, for the period shown on the service. Undelivered amounts are refunded to your balance automatically.</p>`;
 
   view.querySelectorAll("[data-filter]").forEach((b) => b.addEventListener("click", () => {
     state.ordersFilter = b.dataset.filter;
@@ -342,8 +358,7 @@ function renderOrders() {
     t = setTimeout(loadOrders, 300);
   });
   document.getElementById("refresh").addEventListener("click", () => { loadOrders(); refreshMe().catch(() => {}); });
-  loadOrders();
-  state.ordersTimer = setInterval(() => { loadOrders(); refreshMe().catch(() => {}); }, 30000);
+  scheduleOrders(0);
 }
 
 /* ---------------------------------------------------------------- funds */
