@@ -61,5 +61,16 @@ async def fx_rate():
 # Frontend: serve web/ at the root. Mounted last so API routes above win.
 # html=True serves index.html for "/", "/login/", "/dashboard/" and redirects "/login" → "/login/".
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
+
+
+class RevalidatingStaticFiles(StaticFiles):
+    """Browsers must re-check files on every load (cheap 304 via ETag), so deploys show up immediately."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 if WEB_DIR.is_dir():
-    app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
+    app.mount("/", RevalidatingStaticFiles(directory=WEB_DIR, html=True), name="web")
