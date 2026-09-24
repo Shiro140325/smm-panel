@@ -81,6 +81,11 @@ async def main():
         rest = prices[featured_n:]
         check("non-featured sorted cheapest first", rest == sorted(rest), rest[:10])
 
+        # picking a service further down keeps the list (and page) where it was
+        await pg.eval_on_selector("#svc-list", "e => e.scrollTop = 600")
+        await pg.click("#svc-list .svc-option:nth-child(12)")
+        check("picking a service keeps the list scrolled", await pg.eval_on_selector("#svc-list", "e => e.scrollTop") > 300
+              and await pg.eval_on_selector("#svc-list .svc-option:nth-child(12)", "e => e.getAttribute('aria-pressed')") == "true")
         await pg.evaluate("window.__search = document.getElementById('svc-search')")
         await pg.type("#svc-search", "brazil", delay=20)
         await pg.wait_for_timeout(200)

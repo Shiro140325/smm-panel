@@ -313,7 +313,11 @@ function renderNew() {
     const b = e.target.closest("[data-svc]");
     if (!b) return;
     state.serviceId = Number(b.dataset.svc);
+    // the redraw rebuilds the list: keep where the customer was scrolled to
+    const listTop = e.currentTarget.scrollTop, pageY = window.scrollY;
     renderNew();
+    document.getElementById("svc-list").scrollTop = listTop;
+    window.scrollTo(0, pageY);
   });
   let searchTimer;
   document.getElementById("svc-search").addEventListener("input", (e) => {
