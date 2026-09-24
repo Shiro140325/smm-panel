@@ -392,6 +392,10 @@ async function loadTopups() {
 async function pollAfterPayment(topupId) {
   const banner = document.getElementById("funds-banner");
   for (let i = 0; i < 20; i++) {
+    if (topupId) {
+      // ask the server to confirm with PayMongo directly (doesn't depend on the webhook)
+      try { await api(`/topups/${encodeURIComponent(topupId)}/check`, { method: "POST" }); } catch { /* retry next loop */ }
+    }
     const items = await loadTopups();
     const t = topupId ? items.find((x) => x.id === topupId) : null;
     if (t && t.status === "credited") {

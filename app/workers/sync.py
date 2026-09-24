@@ -10,6 +10,7 @@ import time
 from app import fx
 from app.config import get_settings
 from app.db import transaction
+from app.payments import reconcile_pending_topups
 from app.providers.smm_client import SMMClient
 
 log = logging.getLogger("sync")
@@ -191,3 +192,9 @@ async def run_sync_once() -> None:
         await flag_stuck_orders()
     except Exception:
         log.exception("flag_stuck_orders failed")
+    try:
+        n = await reconcile_pending_topups()   # safety net for missed PayMongo webhooks
+        if n:
+            log.info("credited %d top-up(s) via checkout lookup", n)
+    except Exception:
+        log.exception("reconcile_pending_topups failed")

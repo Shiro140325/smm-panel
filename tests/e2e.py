@@ -182,6 +182,39 @@ async def main():
     bal_after = (await c.get("/auth/me")).json()["balance_php"]
     check("custom comments debited", round(bal_before - bal_after, 2) == 0.28, (bal_before, bal_after))
 
+    # --- PayMongo checkout + fallback crediting (webhook missed)
+    m2 = httpx.AsyncClient(base_url=MOCK)
+    bal0 = (await c.get("/auth/me")).json()["balance_php"]
+    r = await c.post("/topups", json={"amount_php": 300})
+    j = r.json()
+    check("create checkout", r.status_code == 200 and j["checkout_url"].startswith("https://checkout.example/"), r.text)
+    sent = (await m2.get("/_pm_last_create")).json()["data"]["attributes"]
+    check("checkout payload: ₱300, gcash+paymaya, return URL", sent["line_items"][0]["amount"] == 30000
+          and sent["payment_method_types"] == ["gcash", "paymaya"] and "/dashboard/#funds?status=success" in sent["success_url"], sent)
+    r = await c.post(f"/topups/{j['topup_id']}/check")
+    check("check before paying → pending", r.json().get("status") == "pending", r.text)
+    sid = (await sql("select checkout_id from topups where id = CAST(:id AS uuid)", {"id": j["topup_id"]}))[0]["checkout_id"]
+    await m2.post("/_pm_pay", data={"sid": sid, "amount_php": 300, "source": "paymaya"})
+    r = await c.post(f"/topups/{j['topup_id']}/check")
+    r2 = await c.post(f"/topups/{j['topup_id']}/check")
+    bal1 = (await c.get("/auth/me")).json()["balance_php"]
+    check("check after paying → credited once", r.json().get("status") == "credited" and r2.json().get("status") == "credited"
+          and round(bal1 - bal0, 2) == 300, (r.text, bal0, bal1))
+    row = await sql("select method from topups where id = CAST(:id AS uuid)", {"id": j["topup_id"]})
+    check("method recorded from checkout (paymaya)", row[0]["method"] == "paymaya", row)
+    # background reconcile for a second top-up, then a late webhook must not double-credit
+    r = await c.post("/topups", json={"amount_php": 150}); t2 = r.json()["topup_id"]
+    sid2 = (await sql("select checkout_id from topups where id = CAST(:id AS uuid)", {"id": t2}))[0]["checkout_id"]
+    await m2.post("/_pm_pay", data={"sid": sid2, "amount_php": 150})
+    await run_sync_once()
+    raw, hdr = signed(paid_event(t2, 150))
+    await c.post("/webhooks/paymongo", content=raw, headers=hdr)
+    bal2 = (await c.get("/auth/me")).json()["balance_php"]
+    check("sync reconcile credits; late webhook doesn't double", round(bal2 - bal1, 2) == 150, (bal1, bal2))
+    r = await c2.post(f"/topups/{j['topup_id']}/check")
+    check("other user can't check my top-up", r.status_code in (401, 404), r.text)
+    await m2.aclose()
+
     # --- other user can't touch my order
     await c2.post("/auth/register", json={"email": "other@example.com", "password": "password123"})
     r = await c2.post(f"/orders/{o_hq['id']}/refill")

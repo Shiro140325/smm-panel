@@ -6,11 +6,10 @@ from pydantic import BaseModel
 
 from app.config import get_settings
 from app.db import transaction
+from app.payments import PAYMONGO_API, reconcile_topup
 from app.security import current_user
 
 router = APIRouter(prefix="/topups", tags=["topups"])
-
-PAYMONGO_API = "https://api.paymongo.com/v1"
 
 
 class TopupIn(BaseModel):
@@ -54,6 +53,27 @@ async def create_topup(body: TopupIn, user: dict = Depends(current_user)):
             update topups set checkout_id = :cid, checkout_url = :url where id = :id
         """, {"cid": sess["id"], "url": sess["attributes"]["checkout_url"], "id": topup_id})
     return {"topup_id": topup_id, "checkout_url": sess["attributes"]["checkout_url"]}
+
+
+@router.post("/{topup_id}/check")
+async def check_topup(topup_id: str, user: dict = Depends(current_user)):
+    """Called when the customer returns from checkout: ask PayMongo directly instead of waiting for the webhook."""
+    try:
+        topup_id = str(uuid.UUID(topup_id))
+    except ValueError:
+        raise HTTPException(404, "Top-up not found")
+    async with transaction() as db:
+        t = await db.fetch_one(
+            "select id, checkout_id, status from topups where id = CAST(:id AS uuid) and user_id = :u",
+            {"id": topup_id, "u": user["id"]},
+        )
+    if not t:
+        raise HTTPException(404, "Top-up not found")
+    if t["status"] == "pending":
+        await reconcile_topup(t)
+        async with transaction() as db:
+            t = await db.fetch_one("select status from topups where id = CAST(:id AS uuid)", {"id": topup_id})
+    return {"status": t["status"]}
 
 
 @router.get("")

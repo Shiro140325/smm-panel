@@ -1,5 +1,6 @@
 """Mock SMM panel API v2 for local testing."""
 from fastapi import FastAPI, Form
+from fastapi.responses import JSONResponse
 
 app = FastAPI()
 STATE = {"next_order": 5000, "next_refill": 900, "orders": {}, "refills": {}}
@@ -60,3 +61,37 @@ async def set_refill(rid: str = Form(...), status: str = Form(...)):
 @app.get("/_last_add")
 async def last_add():
     return STATE.get("last_add", {})
+
+
+# ---------------------------------------------------------------- mock PayMongo
+from fastapi import Request  # noqa: E402
+
+PM = {"sessions": {}, "last_create": None}
+
+
+@app.post("/v1/checkout_sessions")
+async def pm_create(request: Request):
+    body = await request.json()
+    PM["last_create"] = body
+    sid = f"cs_mock_{len(PM['sessions']) + 1}"
+    PM["sessions"][sid] = {"payments": []}
+    return {"data": {"id": sid, "attributes": {"checkout_url": f"https://checkout.example/{sid}"}}}
+
+
+@app.get("/v1/checkout_sessions/{sid}")
+async def pm_get(sid: str):
+    if sid not in PM["sessions"]:
+        return JSONResponse({"errors": [{"detail": "not found"}]}, status_code=404)
+    return {"data": {"id": sid, "attributes": PM["sessions"][sid]}}
+
+
+@app.post("/_pm_pay")
+async def pm_pay(sid: str = Form(...), amount_php: int = Form(...), source: str = Form("gcash")):
+    PM["sessions"].setdefault(sid, {"payments": []})["payments"] = [
+        {"attributes": {"amount": amount_php * 100, "status": "paid", "source": {"type": source}}}]
+    return {"ok": True}
+
+
+@app.get("/_pm_last_create")
+async def pm_last_create():
+    return PM["last_create"] or {}
