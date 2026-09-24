@@ -352,3 +352,15 @@ section.block h2 { font-size: clamp(30px, 3.4vw, 40px); }
   .orders-table td[data-col="refill"]:has(.refill-none) { display: none; }
   .orders-table .link { max-width: none; }
 }
+
+/* Logo */
+.brand { display: inline-flex; align-items: center; line-height: 0; }
+.brand img { height: 44px; width: auto; }
+.brand-lg img { height: 64px; }
+.sidebar .brand { padding: 0 6px; }
+.sidebar .brand img { height: 50px; }
+.site-footer .brand img { height: 48px; }
+@media (max-width: 760px) {
+  .site-header .brand img { height: 38px; }
+  .topbar .brand img { height: 34px; }
+}
