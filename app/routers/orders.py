@@ -15,10 +15,14 @@ router = APIRouter(prefix="/orders", tags=["orders"])
 OPEN_STATUSES = ("creating", "pending", "in_progress")
 
 
+CUSTOM_COMMENTS = "custom comments"
+
+
 class OrderIn(BaseModel):
     service_id: int
     link: str = Field(max_length=500)
     quantity: int = Field(gt=0)
+    comments: str | None = Field(default=None, max_length=200_000)  # one per line, Custom Comments services only
 
     @field_validator("link")
     @classmethod
@@ -36,21 +40,29 @@ async def create_order(body: OrderIn, user: dict = Depends(current_user)):
         svc = await db.fetch_one(SERVICE_SELECT + " and s.id = :id", {"id": body.service_id})
         if not svc:
             raise HTTPException(404, "Service not found")
-        if not svc["min_qty"] <= body.quantity <= svc["max_qty"]:
+
+        quantity, comments = body.quantity, None
+        if (svc["type"] or "").strip().lower() == CUSTOM_COMMENTS:
+            lines = [ln.strip() for ln in (body.comments or "").splitlines() if ln.strip()]
+            if not lines:
+                raise HTTPException(400, "Enter at least one comment, one per line")
+            quantity, comments = len(lines), "\n".join(lines)   # quantity = number of comments
+
+        if not svc["min_qty"] <= quantity <= svc["max_qty"]:
             raise HTTPException(400, f"Quantity must be between {svc['min_qty']} and {svc['max_qty']}")
 
         per_1k = price_per_1k_php(svc["rate"], svc["currency"], svc["markup_pct"])
-        price = order_price_php(per_1k, body.quantity)
+        price = order_price_php(per_1k, quantity)
 
         await db.execute("select id from users where id = :u for update", {"u": user["id"]})
         if await balance_of(db, user["id"]) < price:
             raise HTTPException(402, "Not enough balance")
 
         order = await db.fetch_one("""
-            insert into orders (user_id, service_id, provider_id, link, quantity, price_php)
-            values (:u, :s, :p, :l, :q, :price) returning id
+            insert into orders (user_id, service_id, provider_id, link, quantity, price_php, comments)
+            values (:u, :s, :p, :l, :q, :price, :c) returning id
         """, {"u": user["id"], "s": svc["id"], "p": svc["provider_id"], "l": body.link,
-              "q": body.quantity, "price": price})
+              "q": quantity, "price": price, "c": comments})
         await db.execute(
             "insert into ledger (user_id, delta, reason, ref) values (:u, :d, 'order', :r)",
             {"u": user["id"], "d": -price, "r": str(order["id"])},
@@ -60,7 +72,8 @@ async def create_order(body: OrderIn, user: dict = Depends(current_user)):
     # 2) place upstream — outside the transaction
     try:
         client = SMMClient.for_provider(provider)
-        provider_order_id = await client.add(svc["provider_service_id"], body.link, body.quantity)
+        extra = {"comments": comments} if comments else {}
+        provider_order_id = await client.add(svc["provider_service_id"], body.link, quantity, **extra)
     except ProviderError as e:
         # provider rejected it: mark failed and refund in full
         async with transaction() as db:
@@ -82,7 +95,7 @@ async def create_order(body: OrderIn, user: dict = Depends(current_user)):
             where id = :id
         """, {"po": provider_order_id, "id": order["id"]})
 
-    return {"id": order["id"], "status": "pending", "charge_php": price}
+    return {"id": order["id"], "status": "pending", "quantity": quantity, "charge_php": price}
 
 
 async def _fail_and_refund(db, order_id: int, user_id: int, price: float):

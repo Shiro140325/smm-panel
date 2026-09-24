@@ -21,6 +21,8 @@ async def list_services(platform: str | None = None, db: DB = Depends(get_db)):
             "speed": r["speed"],
             "drop_risk": r["drop_risk"],
             "refill_days": r["refill_days"],
+            # frontend: show a comments textarea (one per line) instead of a quantity field
+            "custom_comments": (r["type"] or "").strip().lower() == "custom comments",
             "min": r["min_qty"],
             "max": r["max_qty"],
             "price_per_1k_php": price_per_1k_php(r["rate"], r["currency"], r["markup_pct"]),

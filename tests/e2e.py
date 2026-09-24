@@ -51,16 +51,19 @@ async def main():
               {"u": f"{MOCK}/api/v2"})
     await run_sync_once()
     ps = await sql("select provider_service_id, rate, refill from provider_services order by 1")
-    check("catalog synced", len(ps) == 2, ps)
+    check("catalog synced", len(ps) == 3, ps)
     await sql("""insert into services (provider_id, provider_service_id, platform, name, tier, refill_days, markup_pct)
                  values (1, 1, 'tiktok', 'TikTok Followers', 'Basic', 0, 80),
-                        (1, 2, 'tiktok', 'TikTok Followers', 'HQ', 30, 60)""")
+                        (1, 2, 'tiktok', 'TikTok Followers', 'HQ', 30, 60),
+                        (1, 3, 'instagram', 'Instagram Custom Comments', 'Basic', 0, 60)""")
 
     c = httpx.AsyncClient(base_url=API)
     r = await c.get("/services")
     svcs = r.json()
     # 0.50 USD * 58 * 1.8 = 52.20 ; 1.20 * 58 * 1.6 = 111.36
-    check("service pricing", [s["price_per_1k_php"] for s in svcs] == [52.2, 111.36], svcs)
+    by_svc = {s["id"]: s for s in svcs}
+    check("service pricing", [by_svc[1]["price_per_1k_php"], by_svc[2]["price_per_1k_php"]] == [52.2, 111.36], svcs)
+    check("custom_comments flag", by_svc[3]["custom_comments"] is True and by_svc[1]["custom_comments"] is False, svcs)
 
     # --- auth
     r = await c.post("/auth/register", json={"email": "Juan@Example.com", "password": "password123"})
@@ -162,6 +165,20 @@ async def main():
     check("refill completed via sync", rows[0]["status"] == "completed" and rows[0]["resolved_at"], rows)
     st = (await c.get("/orders")).json()
     check("refill available again after completion", {o["id"]: o for o in st}[o_hq["id"]]["refill_state"] == "available", st)
+
+    # --- custom comments
+    r = await c.post("/orders", json={"service_id": 3, "link": "https://instagram.com/p/x", "quantity": 1})
+    check("custom comments without comments 400", r.status_code == 400, r.text)
+    bal_before = (await c.get("/auth/me")).json()["balance_php"]
+    r = await c.post("/orders", json={"service_id": 3, "link": "https://instagram.com/p/x", "quantity": 999,
+                                      "comments": "Nice post!\n\n  Galing  \nSolid 🔥\n"})
+    j = r.json()
+    # 1.00 USD * 58 * 1.6 = 92.80/1K → 3 comments = 0.2784 → 0.28
+    check("custom comments: quantity = lines, charge 0.28", r.status_code == 200 and j["quantity"] == 3 and j["charge_php"] == 0.28, r.text)
+    last = (await (httpx.AsyncClient(base_url=MOCK)).get("/_last_add")).json()
+    check("custom comments sent to provider", last.get("comments") == "Nice post!\nGaling\nSolid 🔥" and last.get("quantity") == 3, last)
+    bal_after = (await c.get("/auth/me")).json()["balance_php"]
+    check("custom comments debited", round(bal_before - bal_after, 2) == 0.28, (bal_before, bal_after))
 
     # --- other user can't touch my order
     await c2.post("/auth/register", json={"email": "other@example.com", "password": "password123"})

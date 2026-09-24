@@ -94,12 +94,14 @@ create table if not exists orders (
   cost              numeric(14,6),          -- provider charge, provider currency
   status            text not null default 'creating',
     -- creating | pending | in_progress | completed | partial | canceled | failed | needs_review
+  comments          text,                   -- custom comments, one per line
   start_count       integer,
   remains           integer,
   completed_at      timestamptz,
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now()
 );
+alter table orders add column if not exists comments text;   -- for databases created before this column
 create index if not exists orders_user on orders (user_id, created_at desc);
 create index if not exists orders_sync on orders (provider_id, status);
 
