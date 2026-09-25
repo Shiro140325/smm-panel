@@ -660,7 +660,7 @@ function renderOrders() {
 
 const METHOD_LABEL = { gcash: "GCash", paymaya: "Maya", paymongo: "PayMongo", card: "Card", grab_pay: "GrabPay", qrph: "QR Ph" };
 const PRESETS = [100, 500, 1000, 5000];
-const TOPUP_MIN = 10, TOPUP_MAX = 50000;   // TEMPORARY: back to 100 after live payment testing (app/config.py too)
+const TOPUP_MIN = 100, TOPUP_MAX = 50000;
 
 function amountValue() {
   const n = parseInt(state.amount, 10);

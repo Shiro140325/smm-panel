@@ -24,7 +24,7 @@ class Settings(BaseSettings):
 
     usd_to_php: float = 62.0          # fallback only; live rate comes from app/fx.py
     fx_buffer_pct: float = 2.0        # added on top of the live rate for pricing
-    topup_min_php: int = 10   # TEMPORARY for live payment testing: put back to 100
+    topup_min_php: int = 100
     topup_max_php: int = 50000
 
     sync_interval_seconds: int = 180
