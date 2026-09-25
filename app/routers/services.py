@@ -68,12 +68,32 @@ async def _rows(db: DB, platform: str | None, featured: bool) -> list[dict]:
     return [item for _, item in sorted(rows, key=lambda x: x[0])]
 
 
+TOP_KEY = ("__top__", 65)   # home page table: per platform, followers first, then cheapest, max 65
+
+
+def _top(rows: list[dict], per_platform: int) -> list[dict]:
+    is_followers = lambda r: (r["category"] or "") == "Followers"
+    out, by_pf = [], {}
+    for r in rows:
+        by_pf.setdefault(r["platform"], []).append(r)
+    for pf_rows in by_pf.values():
+        pf_rows.sort(key=lambda r: (not is_followers(r), r["price_per_1k_php"], r["id"]))
+        out += pf_rows[:per_platform]
+    return out
+
+
+async def _produce(db: DB, key: tuple) -> list[dict]:
+    if key[0] == TOP_KEY[0]:
+        return _top(await _rows(db, None, False), key[1])
+    return await _rows(db, *key)
+
+
 async def _build(key: tuple, db: DB | None = None) -> tuple[float, bytes, bytes, str]:
     if db is None:
         async with transaction() as own:
-            rows = await _rows(own, *key)
+            rows = await _produce(own, key)
     else:
-        rows = await _rows(db, *key)
+        rows = await _produce(db, key)
     body = json.dumps(rows, separators=(",", ":"), ensure_ascii=False, default=str).encode()
     entry = (time.monotonic(), body, gzip.compress(body, 9), '"' + hashlib.md5(body).hexdigest() + '"')
     _built[key] = entry
@@ -91,14 +111,23 @@ async def _refresh(key: tuple):
 
 async def warm_cache():
     """Build the lists the site asks for, so no visitor waits for the first build (called by the sync)."""
-    for key in ((None, False), (None, True)):
+    for key in ((None, False), (None, True), TOP_KEY):
         await _build(key)
 
 
 @router.get("")
 async def list_services(request: Request, platform: str | None = None, featured: bool = False,
                         db: DB = Depends(get_db)):
-    key = (platform, featured)
+    return await _cached(request, (platform, featured), db)
+
+
+@router.get("/top")
+async def top_services(request: Request, db: DB = Depends(get_db)):
+    """The home page price table: up to 65 per platform from the whole catalog, followers first, cheapest first."""
+    return await _cached(request, TOP_KEY, db)
+
+
+async def _cached(request: Request, key: tuple, db: DB) -> Response:
     entry = _built.get(key)
     if entry is None or _CACHE_TTL <= 0:
         entry = await _build(key, db)

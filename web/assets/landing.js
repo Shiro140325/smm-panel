@@ -4,7 +4,8 @@ import { icons } from "./icons.js";
 document.getElementById("warn-icon").innerHTML = icons.warn(24);
 initTheme(icons);
 
-let services = [];
+let services = [];   // hand-picked: the preview card
+let table = [];      // whole catalog, up to 65 per platform, followers first then cheapest (server-sorted)
 let current = "tiktok";
 
 function renderTabs(platforms) {
@@ -22,10 +23,7 @@ function renderTabs(platforms) {
 }
 
 function renderTable() {
-  // Followers first, then everything else; cheapest first within each
-  const isFollowers = (s) => (s.category || "") === "Followers" || /follower/i.test(s.name);
-  const rows = services.filter((s) => s.platform === current)
-    .sort((a, b) => (isFollowers(b) - isFollowers(a)) || (a.price_per_1k_php - b.price_per_1k_php) || (a.id - b.id));
+  const rows = table.filter((s) => s.platform === current);
   document.getElementById("price-body").innerHTML = rows.length
     ? rows
         .map(
@@ -70,19 +68,19 @@ function renderHero() {
 
 (async () => {
   try {
-    services = await api("/services?featured=1");
+    [table, services] = await Promise.all([api("/services/top"), api("/services?featured=1").catch(() => [])]);
   } catch (e) {
     document.getElementById("price-body").innerHTML = `<tr><td colspan="6" class="muted">Couldn't load prices right now.</td></tr>`;
     document.getElementById("hero-card").innerHTML = "";
     return;
   }
-  const platforms = PLATFORM_ORDER.filter((p) => services.some((s) => s.platform === p));
+  const platforms = PLATFORM_ORDER.filter((p) => table.some((s) => s.platform === p));
   if (!platforms.includes(current)) current = platforms[0];
   renderTabs(platforms);
   renderTable();
   renderHero();
   try {
     const { total } = await api("/services/count");
-    if (total > services.length) document.getElementById("service-count").textContent = `all ${num(total)} services`;
+    if (total > table.length) document.getElementById("service-count").textContent = `all ${num(total)} services`;
   } catch { /* keep the generic wording */ }
 })();

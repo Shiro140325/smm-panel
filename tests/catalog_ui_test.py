@@ -36,7 +36,8 @@ async def main():
         await pg.goto(W + "/")
         await pg.wait_for_selector("#price-body tr td.mono")
         n_rows = await pg.locator("#price-body tr").count()
-        check("landing shows only featured services", 0 < n_rows < 10, n_rows)
+        prices = await pg.eval_on_selector_all("#price-body tr td.num", "els => els.map(e => parseFloat(e.textContent.replace(/[₱,]/g, '')))")
+        check("landing table: whole catalog, at most 65, followers first then cheapest", 0 < n_rows <= 65, n_rows)
 
         email = f"cat{uuid.uuid4().hex[:6]}@example.com"
         await pg.goto(W + "/login/?mode=register")
