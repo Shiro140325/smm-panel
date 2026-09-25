@@ -659,3 +659,10 @@ a { text-underline-offset: 3px; text-decoration-thickness: 1px; }
 .adjust-form .input[name="note"] { flex: 3; }
 .adjust-form .btn.armed { background: var(--bad); border-color: var(--bad); color: #fff; }
 @media (max-width: 760px) { .tabbar.tabbar-5 { grid-template-columns: repeat(5, 1fr); } .tabbar-5 a { font-size: 11px; } }
+
+/* Support page */
+.support-card { gap: 14px; }
+.support-email { font-family: var(--font-display); font-weight: 700; font-size: clamp(24px, 4vw, 34px); letter-spacing: -0.02em; color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
+.support-email:hover { text-decoration: underline; }
+.support-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.support-tips { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; color: var(--ink-2); }

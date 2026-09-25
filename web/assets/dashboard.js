@@ -58,7 +58,7 @@ async function refreshMe() {
 
 function route() {
   const [name, qs] = location.hash.replace(/^#/, "").split("?");
-  return { name: ["new", "mass", "orders", "funds"].includes(name) ? name : "new", params: new URLSearchParams(qs || "") };
+  return { name: ["new", "mass", "orders", "funds", "support"].includes(name) ? name : "new", params: new URLSearchParams(qs || "") };
 }
 
 let servicesReady = false, servicesLoad = Promise.resolve();
@@ -77,6 +77,7 @@ function render() {
   if (name === "new") renderNew();
   else if (name === "mass") renderMass();
   else if (name === "orders") renderOrders();
+  else if (name === "support") renderSupport();
   else renderFunds(params);
   window.scrollTo(0, 0);
   // balance may have changed elsewhere (top-up credited, refunds): refresh it and re-check the form
@@ -89,6 +90,47 @@ function render() {
 }
 
 window.addEventListener("hashchange", render);
+
+/* ------------------------------------------------------------ support */
+
+const SUPPORT_EMAIL = "support@smmshiro.com";
+
+function renderSupport() {
+  const subject = encodeURIComponent("SMM Shiro support");
+  const body = encodeURIComponent(`Account: ${state.user?.email || ""}\nOrder # (if any): \n\nWhat happened:\n`);
+  view.innerHTML = `
+    <div class="page-head"><h1>Support</h1></div>
+    <div class="two-col">
+      <div class="card panel primary support-card">
+        <span class="kicker">Email us</span>
+        <a class="support-email" href="mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}">${SUPPORT_EMAIL}</a>
+        <p style="color:var(--ink-2)">Questions about an order, a top-up or your account: send us an email and we'll get back to you as soon as we can.</p>
+        <div class="support-actions">
+          <a class="btn btn-primary" href="mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}">${icons.chat(18)}Email support</a>
+          <button type="button" class="btn btn-secondary" id="copy-email">Copy address</button>
+        </div>
+      </div>
+      <div class="aside">
+        <div class="card details">
+          <h3>To help us help you faster</h3>
+          <ul class="support-tips">
+            <li>Send it from <strong>${esc(state.user?.email || "the email you signed up with")}</strong>, so we can find your account.</li>
+            <li>Include the <strong>order #</strong> (from your <a href="#orders">Orders</a> page) or the top-up amount and time.</li>
+            <li>Say what you expected and what happened instead. A screenshot helps.</li>
+            <li>Never send your social media password. We don't need it.</li>
+          </ul>
+        </div>
+        <div class="card details">
+          <h3>Before you write</h3>
+          <p style="color:var(--ink-2);font-size:14px">Undelivered parts of an order are refunded to your balance automatically, and refills can be requested from <a href="#orders">Orders</a> once an order completes. Common questions are answered in the <a href="/#faq">FAQ</a>.</p>
+        </div>
+      </div>
+    </div>`;
+  document.getElementById("copy-email").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(SUPPORT_EMAIL); toast("Email address copied"); }
+    catch { toast(SUPPORT_EMAIL); }
+  });
+}
 
 /* ------------------------------------------------------------ new order */
 
@@ -237,7 +279,7 @@ function renderNew() {
   const svc = selectedService();
 
   view.innerHTML = `
-    <div class="page-head"><h1>New order</h1><a href="mailto:support@smmshiro.com" style="font-weight:600;text-decoration:none">Need help?</a></div>
+    <div class="page-head"><h1>New order</h1><a href="#support" style="font-weight:600;text-decoration:none">Need help?</a></div>
     <div class="two-col">
       <form class="card panel primary" id="order-form" novalidate>
         <div class="field">
