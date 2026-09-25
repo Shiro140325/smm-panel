@@ -236,7 +236,7 @@ def classify(svc: dict):
         "description": desc,
         "start_time": start,
         "speed": speed,
-        "drop_risk": "Lowest" if non_drop else "Moderate" if api_refill else "High",
+        "drop_risk": "Lowest" if non_drop else "Moderate" if api_refill else "Likely",
         "refill_days": days,
     }
 

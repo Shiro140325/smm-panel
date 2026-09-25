@@ -75,7 +75,7 @@ create table if not exists services (
   description         text,
   start_time          text,                   -- "0–6 hrs"
   speed               text,                   -- "Up to 5K / day"
-  drop_risk           text,                   -- Low | Moderate | High
+  drop_risk           text,                   -- Lowest | Low | Moderate | Likely
   refill_days         integer not null default 0,   -- 0 = no refill
   markup_pct          numeric(6,2),           -- null = tiered by provider rate (see app/pricing.py)
   auto                boolean not null default false,   -- true = imported by app/catalog.py
