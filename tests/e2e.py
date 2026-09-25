@@ -308,6 +308,35 @@ async def main():
     r = await c2.post(f"/orders/{o_hq['id']}/refill")
     check("other user's order 404", r.status_code == 404, r.text)
 
+    # --- cancel a running order
+    oc = (await c.post("/orders", json={"service_id": 1, "link": "https://tiktok.com/@cancelme", "quantity": 1000})).json()
+    lst = {o["id"]: o for o in (await c.get("/orders")).json()}
+    check("running order on a cancellable service offers cancel", lst[oc["id"]]["can_cancel"] and not lst[oc["id"]]["cancel_requested"], lst[oc["id"]])
+    r = await c2.post(f"/orders/{oc['id']}/cancel")
+    check("other user can't cancel my order", r.status_code == 404, r.text)
+    bal_c0 = (await c.get("/auth/me")).json()["balance_php"]
+    r = await c.post(f"/orders/{oc['id']}/cancel")
+    lst = {o["id"]: o for o in (await c.get("/orders")).json()}
+    check("cancel sent to provider, shown as requested, no refund yet", r.status_code == 200
+          and lst[oc["id"]]["cancel_requested"] and not lst[oc["id"]]["can_cancel"]
+          and (await c.get("/auth/me")).json()["balance_php"] == bal_c0, (r.text, lst[oc["id"]]))
+    r = await c.post(f"/orders/{oc['id']}/cancel")
+    check("second cancel 409", r.status_code == 409, r.text)
+    pid_c = str((await sql("select provider_order_id from orders where id = :i", {"i": oc["id"]}))[0]["provider_order_id"])
+    await m.post("/_set_order", data={"oid": pid_c, "status": "Canceled", "remains": "1000"})
+    await run_sync_once()
+    bal_c1 = (await c.get("/auth/me")).json()["balance_php"]
+    lst = {o["id"]: o for o in (await c.get("/orders")).json()}
+    check("provider cancels → full refund once, no more cancel button", round(bal_c1 - bal_c0, 2) == oc["charge_php"]
+          and lst[oc["id"]]["status"] == "canceled" and not lst[oc["id"]]["can_cancel"] and not lst[oc["id"]]["cancel_requested"],
+          (bal_c0, bal_c1, lst[oc["id"]]))
+    oc2 = (await c.post("/orders", json={"service_id": 3, "link": "https://instagram.com/p/y", "quantity": 1, "comments": "Nice"})).json()
+    lst = {o["id"]: o for o in (await c.get("/orders")).json()}
+    r = await c.post(f"/orders/{oc2['id']}/cancel")
+    check("service without cancel: no button, 400", not lst[oc2["id"]]["can_cancel"] and r.status_code == 400, r.text)
+    r = await c.post(f"/orders/{o_hq['id']}/cancel")
+    check("completed order can't be canceled", r.status_code == 400, r.text)
+
     # --- ledger integrity
     led = await sql("select reason, sum(delta) s, count(*) n from ledger where user_id = :u group by reason order by reason",
                     {"u": me["id"]})

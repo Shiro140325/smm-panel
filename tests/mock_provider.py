@@ -40,6 +40,18 @@ async def api(key: str = Form(...), action: str = Form(...), service: int | None
         STATE["next_refill"] += 1
         STATE["refills"][str(STATE["next_refill"])] = "Pending"
         return {"refill": str(STATE["next_refill"])}
+    if action == "cancel":
+        out = []
+        for o in orders.split(","):
+            st = STATE["orders"].get(o)
+            if not st:
+                out.append({"order": int(o), "cancel": {"error": "Incorrect order ID"}})
+            elif st["status"] in ("Completed", "Partial", "Canceled"):
+                out.append({"order": int(o), "cancel": {"error": "Order can't be canceled"}})
+            else:
+                STATE.setdefault("cancel_requests", []).append(o)
+                out.append({"order": int(o), "cancel": 1})
+        return out
     if action == "refill_status":
         return [{"refill": int(r), "status": STATE["refills"].get(r, {"error": "Refill not found"})}
                 for r in refills.split(",")]

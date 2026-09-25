@@ -245,9 +245,14 @@ async def list_orders(status: str | None = None, q: str | None = None,
                      else 'available'
                    end as refill_state,
                    coalesce((select sum(l.delta) from ledger l
-                              where l.reason = 'refund' and l.ref = o.id::text), 0) as refunded_php
+                              where l.reason = 'refund' and l.ref = o.id::text), 0) as refunded_php,
+                   (o.status in ('pending', 'in_progress') and o.cancel_requested_at is not null) as cancel_requested,
+                   (o.status in ('pending', 'in_progress') and o.cancel_requested_at is null
+                     and o.provider_order_id is not null and coalesce(ps.cancel, false)) as can_cancel
               from orders o
               join services s on s.id = o.service_id
+              left join provider_services ps
+                on ps.provider_id = o.provider_id and ps.provider_service_id = s.provider_service_id
               left join lateral (
                 select status from provider_refills pr
                  where pr.order_id = o.id order by pr.requested_at desc limit 1
@@ -297,3 +302,46 @@ async def request_refill(order_id: int, user: dict = Depends(current_user)):
             values (:o, :p, :r) on conflict do nothing
         """, {"o": order_id, "p": row["provider_id"], "r": refill_id})
     return {"ok": True, "refill_id": refill_id}
+
+
+@router.post("/{order_id}/cancel")
+async def request_cancel(order_id: int, user: dict = Depends(current_user)):
+    """Ask the provider to cancel a running order. Nothing is refunded here: when the provider
+    reports it canceled (or partial), the status sync refunds the undelivered part."""
+    async with transaction() as db:
+        row = await db.fetch_one("""
+            select o.status, o.provider_order_id, o.cancel_requested_at, ps.cancel,
+                   p.api_url, p.api_key_env
+              from orders o
+              join services s on s.id = o.service_id
+              join providers p on p.id = o.provider_id
+              left join provider_services ps
+                on ps.provider_id = o.provider_id and ps.provider_service_id = s.provider_service_id
+             where o.id = :id and o.user_id = :u
+        """, {"id": order_id, "u": user["id"]})
+    if not row:
+        raise HTTPException(404, "Order not found")
+    if row["status"] not in ("pending", "in_progress") or not row["provider_order_id"]:
+        raise HTTPException(400, "Only pending or in-progress orders can be canceled")
+    if not row["cancel"]:
+        raise HTTPException(400, "This service can't be canceled once placed")
+    if row["cancel_requested_at"]:
+        raise HTTPException(409, "Cancel already requested")
+
+    provider = {k: row[k] for k in ("api_url", "api_key_env")}
+    try:
+        res = await SMMClient.for_provider(provider).cancel([row["provider_order_id"]])
+    except ProviderError as e:
+        raise HTTPException(400, f"Cancel not accepted: {e}")
+    # API v2: [{"order": 123, "cancel": 1}] or [{"order": 123, "cancel": {"error": "..."}}]
+    item = next((x for x in (res if isinstance(res, list) else [])
+                 if str(x.get("order")) == str(row["provider_order_id"])), None)
+    result = (item or {}).get("cancel")
+    if isinstance(result, dict) or not result:
+        err = result.get("error") if isinstance(result, dict) else "no answer from provider"
+        raise HTTPException(400, f"Cancel not accepted: {err}")
+
+    async with transaction() as db:
+        await db.execute("update orders set cancel_requested_at = now(), updated_at = now() where id = :id",
+                         {"id": order_id})
+    return {"ok": True}

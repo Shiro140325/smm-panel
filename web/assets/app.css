@@ -377,6 +377,9 @@ section.block h2 { font-size: clamp(30px, 3.4vw, 40px); }
 .btn-sm { min-height: 36px; padding: 6px 12px; font-size: 13px; border-radius: 8px; }
 .btn-ghost.btn-sm { border-color: var(--line); }
 .btn-ghost.btn-sm:hover { border-color: var(--ink); }
+.order-cancel { background: var(--surface); color: var(--ink); border-color: var(--border-strong); }
+.order-cancel:hover { border-color: var(--ink); }
+.order-cancel.armed { background: var(--bad-bg); color: var(--bad); border-color: var(--bad); }
 
 /* Mobile top bar + bottom tabs (hidden on desktop) */
 .topbar, .tabbar { display: none; }

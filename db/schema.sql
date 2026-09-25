@@ -108,10 +108,12 @@ create table if not exists orders (
   start_count       integer,
   remains           integer,
   completed_at      timestamptz,
+  cancel_requested_at timestamptz,          -- customer asked the provider to cancel
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now()
 );
 alter table orders add column if not exists comments text;   -- for databases created before this column
+alter table orders add column if not exists cancel_requested_at timestamptz;
 create index if not exists orders_user on orders (user_id, created_at desc);
 create index if not exists orders_sync on orders (provider_id, status);
 

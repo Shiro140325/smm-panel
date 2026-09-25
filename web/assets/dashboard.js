@@ -550,7 +550,15 @@ const STATUS = {
 };
 const FILTERS = [["", "All"], ["pending", "Pending"], ["in_progress", "In progress"], ["completed", "Completed"], ["partial", "Partial"], ["canceled", "Canceled"]];
 
+// Cancel needs a second tap within a few seconds; kept outside the row so the 10s refresh doesn't reset it.
+let cancelArmed = { id: null, until: 0 };
+const armed = (id) => cancelArmed.id === id && Date.now() < cancelArmed.until;
+
 function refillCell(o) {
+  if (o.cancel_requested) return `<span class="muted">Cancel requested</span>`;
+  if (o.can_cancel) {
+    return `<button type="button" class="btn btn-sm order-cancel${armed(o.id) ? " armed" : ""}" data-cancel-order="${o.id}">${armed(o.id) ? "Tap again to cancel" : "Cancel order"}</button>`;
+  }
   if (o.refill_state === "available") return `<button type="button" class="btn btn-outline-accent" data-refill="${o.id}">Request refill</button>`;
   if (o.refill_state === "requested") return `<span class="muted">Refill requested</span>`;
   if (Number(o.refunded_php) > 0) return `<span class="muted">${peso(o.refunded_php)} refunded</span>`;
@@ -603,6 +611,26 @@ async function loadOrders() {
     }
     loadOrders();
   }));
+  tbody.querySelectorAll("[data-cancel-order]").forEach((b) => b.addEventListener("click", async () => {
+    const id = Number(b.dataset.cancelOrder);
+    if (!armed(id)) {   // first tap: ask to confirm
+      cancelArmed = { id, until: Date.now() + 5000 };
+      b.classList.add("armed");
+      b.textContent = "Tap again to cancel";
+      setTimeout(() => { if (!armed(id) && b.isConnected) { b.classList.remove("armed"); b.textContent = "Cancel order"; } }, 5100);
+      return;
+    }
+    cancelArmed = { id: null, until: 0 };
+    b.disabled = true;
+    b.textContent = "Canceling…";
+    try {
+      await api(`/orders/${id}/cancel`, { method: "POST" });
+      toast("Cancel requested. Anything not delivered is refunded once the provider confirms.");
+    } catch (ex) {
+      toast(ex.message, { bad: true });
+    }
+    loadOrders();
+  }));
   return orders;
 }
 
@@ -635,11 +663,11 @@ function renderOrders() {
     </div>
     <div class="card table-card orders-card"><div class="table-scroll orders-scroll">
       <table class="table orders-table" aria-label="Orders">
-        <thead><tr><th>ID</th><th>Date</th><th>Service and link</th><th class="num">Qty</th><th class="num">Remains</th><th class="num">Charge</th><th>Status</th><th>Refill</th></tr></thead>
+        <thead><tr><th>ID</th><th>Date</th><th>Service and link</th><th class="num">Qty</th><th class="num">Remains</th><th class="num">Charge</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody id="orders-body"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
       </table>
     </div></div>
-    <p class="hint"><span id="orders-updated"></span> · Running orders update every 10 seconds. Refill is available after an order completes, for the period shown on the service. Undelivered amounts are refunded to your balance automatically.</p>`;
+    <p class="hint"><span id="orders-updated"></span> · Running orders update every 10 seconds. Pending and in-progress orders can be canceled on services that allow it. Refill is available after an order completes, for the period shown on the service. Undelivered amounts are refunded to your balance automatically.</p>`;
 
   view.querySelectorAll("[data-filter]").forEach((b) => b.addEventListener("click", () => {
     state.ordersFilter = b.dataset.filter;
