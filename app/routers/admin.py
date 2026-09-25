@@ -18,7 +18,7 @@ from app.config import get_settings
 from app.db import DB, get_db
 from app.providers.smm_client import SMMClient
 from app.routers import services as services_router
-from app.routers.orders import _fail_and_refund
+from app.routers.orders import _fail_and_refund, order_filter
 
 router = APIRouter(prefix="/admin/api", tags=["admin"])
 log = logging.getLogger("admin")
@@ -143,14 +143,14 @@ async def orders(status: str | None = None, q: str | None = None, limit: int = 5
                  db: DB = Depends(get_db)):
     where, params = ["true"], {"lim": max(1, min(limit, 200)), "off": max(0, offset)}
     if status:
-        where.append("o.status = :st")
-        params["st"] = status
+        order_filter(status, where, params)
     if q:
         where.append("(o.id::text = :q or o.provider_order_id::text = :q or u.email ilike :ql or o.link ilike :ql)")
         params.update(q=q.strip().lstrip("#"), ql=f"%{q.strip()}%")
     return await db.fetch_all(f"""
         select o.id, o.created_at, o.status, o.quantity, o.remains, o.price_php, o.cost, o.link,
                o.provider_order_id, o.cancel_requested_at, u.email, s.name as service_name, s.tier,
+               (select pr.status from provider_refills pr where pr.order_id = o.id order by pr.requested_at desc limit 1) as refill_status,
                coalesce((select sum(l.delta) from ledger l where l.reason = 'refund' and l.ref = o.id::text), 0) as refunded_php
           from orders o join users u on u.id = o.user_id join services s on s.id = o.service_id
          where {' and '.join(where)}

@@ -130,7 +130,8 @@ async function renderOverview() {
 /* ------------------------------------------------------------ orders */
 
 const ORDER_FILTERS = [["", "All"], ["needs_review", "Under review"], ["pending", "Pending"], ["in_progress", "In progress"],
-  ["completed", "Completed"], ["partial", "Partial"], ["canceled", "Canceled"], ["failed", "Failed"]];
+  ["completed", "Completed"], ["partial", "Partial"], ["canceled", "Canceled"], ["failed", "Failed"],
+  ["refilling", "Refilling"], ["refunded", "Refunded"]];
 
 function renderOrders() {
   const params = new URLSearchParams(location.hash.split("?")[1] || "");
@@ -159,6 +160,7 @@ function renderOrders() {
       <td data-col="status">${badge(ORDER_STATUS, o.status)}</td>
       <td data-col="refill">${o.status === "needs_review"
         ? `<button type="button" class="btn btn-sm order-cancel" data-refund="${o.id}">Refund ${peso(o.price_php)}</button>`
+        : o.refill_status === "pending" ? `<span class="muted">Refill in progress</span>`
         : Number(o.refunded_php) > 0 ? `<span class="muted">${peso(o.refunded_php)} refunded</span>`
           : o.cancel_requested_at ? `<span class="muted">Cancel requested</span>` : `<span class="muted refill-none">–</span>`}</td>
     </tr>`).join("") : `<tr><td colspan="8" class="empty">No orders.</td></tr>`;

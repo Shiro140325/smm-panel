@@ -554,7 +554,7 @@ const STATUS = {
   failed: ["Failed", "badge-failed"],
   needs_review: ["Under review", "badge-review"],
 };
-const FILTERS = [["", "All"], ["pending", "Pending"], ["in_progress", "In progress"], ["completed", "Completed"], ["partial", "Partial"], ["canceled", "Canceled"]];
+const FILTERS = [["", "All"], ["pending", "Pending"], ["in_progress", "In progress"], ["completed", "Completed"], ["partial", "Partial"], ["canceled", "Canceled"], ["refilling", "Refilling"], ["refunded", "Refunded"]];
 
 // Cancel needs a second tap within a few seconds; kept outside the row so the 10s refresh doesn't reset it.
 let cancelArmed = { id: null, until: 0 };
@@ -566,7 +566,7 @@ function refillCell(o) {
     return `<button type="button" class="btn btn-sm order-cancel${armed(o.id) ? " armed" : ""}" data-cancel-order="${o.id}">${armed(o.id) ? "Tap again to cancel" : "Cancel order"}</button>`;
   }
   if (o.refill_state === "available") return `<button type="button" class="btn btn-outline-accent" data-refill="${o.id}">Request refill</button>`;
-  if (o.refill_state === "requested") return `<span class="muted">Refill requested</span>`;
+  if (o.refill_state === "requested") return `<span class="muted">Refill in progress</span>`;
   if (Number(o.refunded_php) > 0) return `<span class="muted">${peso(o.refunded_php)} refunded</span>`;
   if (o.refill_state === "after_completion") return `<span class="muted">After completion</span>`;
   if (o.refill_state === "expired") return `<span class="muted">Refill period ended</span>`;

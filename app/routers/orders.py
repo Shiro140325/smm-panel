@@ -218,6 +218,24 @@ async def _live_sync(user_id: int) -> None:
         log.warning("live sync for user %s skipped", user_id, exc_info=True)
 
 
+
+# Order list filters: a real status, or one of these views (shared with /admin).
+ORDER_VIEWS = {
+    # a refill was asked for and the provider hasn't finished it yet
+    "refilling": "exists (select 1 from provider_refills pr where pr.order_id = o.id and pr.status = 'pending')",
+    # money went back to the customer for this order (failed, canceled or partial)
+    "refunded": "exists (select 1 from ledger l where l.reason = 'refund' and l.ref = o.id::text)",
+}
+
+
+def order_filter(status: str, where: list, params: dict) -> None:
+    if status in ORDER_VIEWS:
+        where.append(ORDER_VIEWS[status])
+    else:
+        where.append("o.status = :st")
+        params["st"] = status
+
+
 @router.get("")
 async def list_orders(status: str | None = None, q: str | None = None,
                       limit: int = 50, offset: int = 0, user: dict = Depends(current_user)):
@@ -226,8 +244,7 @@ async def list_orders(status: str | None = None, q: str | None = None,
     where = ["o.user_id = :u"]
     params: dict = {"u": user["id"], "lim": limit, "off": offset}
     if status:
-        where.append("o.status = :st")
-        params["st"] = status
+        order_filter(status, where, params)
     if q:
         where.append("(o.id::text = :q or o.link ilike :ql)")
         params.update(q=q.lstrip("#"), ql=f"%{q}%")

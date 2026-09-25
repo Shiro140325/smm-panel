@@ -174,6 +174,8 @@ async def main():
     check("refill on no-refill service 400", r.status_code == 400, r.text)
     r = await c.post(f"/orders/{o_hq['id']}/refill")
     check("refill requested", r.status_code == 200, r.text)
+    ids = [o["id"] for o in (await c.get("/orders", params={"status": "refilling"})).json()]
+    check("Refilling tab shows the order while its refill runs", ids == [o_hq["id"]], ids)
     rid = str(r.json().get("refill_id"))
     r = await c.post(f"/orders/{o_hq['id']}/refill")
     check("second refill while pending 409", r.status_code == 409, r.text)
@@ -183,6 +185,12 @@ async def main():
     await run_sync_once()
     rows = await sql("select status, resolved_at from provider_refills")
     check("refill completed via sync", rows[0]["status"] == "completed" and rows[0]["resolved_at"], rows)
+    ids = [o["id"] for o in (await c.get("/orders", params={"status": "refilling"})).json()]
+    check("…and drops off the Refilling tab once done", ids == [], ids)
+    refunded = (await c.get("/orders", params={"status": "refunded"})).json()
+    expect = {r["ref"]: float(r["delta"]) for r in await sql("select ref, delta from ledger where user_id = :u and reason = 'refund'", {"u": me["id"]})}
+    check("Refunded tab: exactly the refunded orders, with amounts", {str(o["id"]): float(o["refunded_php"]) for o in refunded} == expect
+          and all(float(o["refunded_php"]) > 0 for o in refunded), (refunded, expect))
     st = (await c.get("/orders")).json()
     check("refill available again after completion", {o["id"]: o for o in st}[o_hq["id"]]["refill_state"] == "available", st)
 
@@ -356,6 +364,8 @@ async def main():
     orr = (await c.post("/orders", json={"service_id": 1, "link": "https://tiktok.com/@review", "quantity": 100})).json()
     await sql("update orders set status = 'needs_review' where id = :i", {"i": orr["id"]})
     rows = (await ca.get("/admin/api/orders", params={"status": "needs_review"})).json()
+    ar = (await ca.get("/admin/api/orders", params={"status": "refunded"})).json()
+    check("admin: Refunded filter across customers", ar and all(float(o["refunded_php"]) > 0 for o in ar), ar[:2])
     check("admin: orders filter finds the one under review", [o["id"] for o in rows] == [orr["id"]] and rows[0]["email"] == "juan@example.com", rows)
     b0 = (await c.get("/auth/me")).json()["balance_php"]
     r = await ca.post(f"/admin/api/orders/{orr['id']}/refund")
