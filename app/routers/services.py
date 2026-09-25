@@ -68,19 +68,23 @@ async def _rows(db: DB, platform: str | None, featured: bool) -> list[dict]:
     return [item for _, item in sorted(rows, key=lambda x: x[0])]
 
 
-TOP_KEY = ("__top__", 65)   # home page table: per platform, 5 cheapest followers, then the cheapest rest, max 65
-TOP_FOLLOWERS = 5
+TOP_KEY = ("__top__", 65)   # home page table: per platform, the 5 cheapest of each category, max 65
+TOP_PER_CATEGORY = 5
+# followers first, then what customers look for most; unknown categories (site names under "other") after
+CATEGORY_ORDER = ["Followers", "Subscribers", "Members", "Likes", "Views", "Comments", "Reactions", "Shares",
+                  "Saves", "Plays", "Stories", "Live stream", "Comment likes", "Other"]
 
 
 def _top(rows: list[dict], per_platform: int) -> list[dict]:
-    out, by_pf = [], {}
+    rank = lambda c: (CATEGORY_ORDER.index(c), "") if c in CATEGORY_ORDER else (len(CATEGORY_ORDER), c)
+    out, groups = [], {}
     for r in rows:
-        by_pf.setdefault(r["platform"], []).append(r)
-    for pf_rows in by_pf.values():
-        pf_rows.sort(key=lambda r: (r["price_per_1k_php"], r["id"]))
-        followers = [r for r in pf_rows if (r["category"] or "") == "Followers"][:TOP_FOLLOWERS]
-        picked = {r["id"] for r in followers}
-        out += (followers + [r for r in pf_rows if r["id"] not in picked])[:per_platform]
+        groups.setdefault(r["platform"], {}).setdefault(r["category"] or "Other", []).append(r)
+    for cats in groups.values():
+        picked = []
+        for cat in sorted(cats, key=rank):
+            picked += sorted(cats[cat], key=lambda r: (r["price_per_1k_php"], r["id"]))[:TOP_PER_CATEGORY]
+        out += picked[:per_platform]
     return out
 
 
@@ -125,7 +129,7 @@ async def list_services(request: Request, platform: str | None = None, featured:
 
 @router.get("/top")
 async def top_services(request: Request, db: DB = Depends(get_db)):
-    """The home page price table: per platform, the 5 cheapest followers, then the cheapest of the rest (max 65)."""
+    """The home page price table: per platform, the 5 cheapest of each category, followers first (max 65)."""
     return await _cached(request, TOP_KEY, db)
 
 
