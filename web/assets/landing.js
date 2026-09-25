@@ -22,7 +22,10 @@ function renderTabs(platforms) {
 }
 
 function renderTable() {
-  const rows = services.filter((s) => s.platform === current);
+  // Followers first, then everything else; cheapest first within each
+  const isFollowers = (s) => (s.category || "") === "Followers" || /follower/i.test(s.name);
+  const rows = services.filter((s) => s.platform === current)
+    .sort((a, b) => (isFollowers(b) - isFollowers(a)) || (a.price_per_1k_php - b.price_per_1k_php) || (a.id - b.id));
   document.getElementById("price-body").innerHTML = rows.length
     ? rows
         .map(
