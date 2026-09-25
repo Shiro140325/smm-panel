@@ -644,3 +644,18 @@ a { text-underline-offset: 3px; text-decoration-thickness: 1px; }
   .ticker-track, .dd-list { animation: none; }
   .step, .tier-card, .btn, .dd-chev { transition: none; }
 }
+
+/* ==========================================================================
+   Control panel (/admin)
+   ========================================================================== */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
+.stat { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 18px 20px; display: flex; flex-direction: column; gap: 4px; }
+.stat .k { font-size: 13px; color: var(--muted); font-weight: 600; }
+.stat .v { font-family: var(--font-display); font-size: 28px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; }
+.stat .v.small { font-size: 18px; }
+.stat .s { font-size: 13px; color: var(--muted); }
+.adjust-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.adjust-form .input { min-height: 40px; flex: 1; min-width: 160px; }
+.adjust-form .input[name="note"] { flex: 3; }
+.adjust-form .btn.armed { background: var(--bad); border-color: var(--bad); color: #fff; }
+@media (max-width: 760px) { .tabbar.tabbar-5 { grid-template-columns: repeat(5, 1fr); } .tabbar-5 a { font-size: 11px; } }

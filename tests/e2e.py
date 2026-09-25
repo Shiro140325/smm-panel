@@ -337,6 +337,66 @@ async def main():
     r = await c.post(f"/orders/{o_hq['id']}/cancel")
     check("completed order can't be canceled", r.status_code == 400, r.text)
 
+    # --- control panel (/admin)
+    ca = httpx.AsyncClient(base_url=API)
+    r = await ca.get("/admin/api/overview")
+    check("admin: no session → 401", r.status_code == 401, r.text)
+    r = await c.get("/admin/api/overview")
+    check("admin: a customer's login doesn't open it", r.status_code == 401, r.text)
+    r = await ca.post("/admin/api/login", json={"password": "wrong"})
+    check("admin: wrong password 401", r.status_code == 401, r.text)
+    r = await ca.post("/admin/api/login", json={"password": os.environ["ADMIN_PASS"]})
+    check("admin: right password → session cookie", r.status_code == 200 and "admin_session" in ca.cookies, r.text)
+    ov = (await ca.get("/admin/api/overview")).json()
+    check("admin: overview has money, sales and SMMGen balance", ov.get("customers", 0) >= 2 and "all" in ov.get("sales", {})
+          and ov["providers"] and ov["providers"][0].get("balance") == 100.0, ov)
+    bal_led = float((await sql("select coalesce(sum(delta), 0) s from ledger"))[0]["s"])
+    check("admin: customer balances = ledger total", round(ov["balances_php"], 2) == round(bal_led, 2), (ov["balances_php"], bal_led))
+
+    orr = (await c.post("/orders", json={"service_id": 1, "link": "https://tiktok.com/@review", "quantity": 100})).json()
+    await sql("update orders set status = 'needs_review' where id = :i", {"i": orr["id"]})
+    rows = (await ca.get("/admin/api/orders", params={"status": "needs_review"})).json()
+    check("admin: orders filter finds the one under review", [o["id"] for o in rows] == [orr["id"]] and rows[0]["email"] == "juan@example.com", rows)
+    b0 = (await c.get("/auth/me")).json()["balance_php"]
+    r = await ca.post(f"/admin/api/orders/{orr['id']}/refund")
+    b1 = (await c.get("/auth/me")).json()["balance_php"]
+    check("admin: refund an order under review", r.status_code == 200 and round(b1 - b0, 2) == orr["charge_php"], (r.text, b0, b1))
+    r = await ca.post(f"/admin/api/orders/{orr['id']}/refund")
+    check("admin: can't refund it twice", r.status_code == 400, r.text)
+
+    users = (await ca.get("/admin/api/users", params={"q": "juan@"})).json()
+    uid = users[0]["id"]
+    check("admin: customer search", len(users) == 1 and round(users[0]["balance_php"], 2) == round(b1, 2), users)
+    r = await ca.post(f"/admin/api/users/{uid}/adjust", json={"amount_php": 50, "note": "goodwill credit"})
+    b2 = (await c.get("/auth/me")).json()["balance_php"]
+    led = await sql("select reason, ref from ledger where user_id = :u order by id desc limit 1", {"u": uid})
+    check("admin: add balance, recorded with the note", r.status_code == 200 and round(b2 - b1, 2) == 50
+          and led[0]["reason"] == "adjustment" and led[0]["ref"] == "goodwill credit", (r.text, b1, b2, led))
+    r = await ca.post(f"/admin/api/users/{uid}/adjust", json={"amount_php": -(b2 + 1), "note": "too much"})
+    check("admin: can't take a balance below zero", r.status_code == 400, r.text)
+    tps = (await ca.get("/admin/api/topups", params={"status": "credited"})).json()
+    check("admin: top-ups list", tps and all(t["status"] == "credited" for t in tps), tps[:2])
+
+    r = await ca.post("/admin/api/services/1/hidden", json={"hidden": True})
+    ids = [x["id"] for x in (await c.get("/services")).json()]
+    r2 = await c.post("/orders", json={"service_id": 1, "link": "https://tiktok.com/@hidden", "quantity": 100})
+    hid = (await ca.get("/admin/api/services", params={"hidden": "true"})).json()
+    check("admin: hidden service leaves the site and can't be ordered", r.status_code == 200 and 1 not in ids
+          and r2.status_code in (400, 404) and [x["id"] for x in hid] == [1], (ids, r2.text, hid))
+    await run_sync_once()   # catalog import must not bring it back
+    check("admin: stays hidden after a catalog sync", 1 not in [x["id"] for x in (await c.get("/services")).json()])
+    await ca.post("/admin/api/services/1/hidden", json={"hidden": False})
+    check("admin: showing it again", 1 in [x["id"] for x in (await c.get("/services")).json()])
+
+    await ca.post("/admin/api/logout")
+    r = await ca.get("/admin/api/overview")
+    check("admin: logout ends the session", r.status_code == 401, r.text)
+    for _ in range(5):
+        await ca.post("/admin/api/login", json={"password": "nope"})
+    r = await ca.post("/admin/api/login", json={"password": os.environ["ADMIN_PASS"]})
+    check("admin: locked for 15 min after 5 wrong passwords", r.status_code == 429, r.text)
+    await ca.aclose()
+
     # --- ledger integrity
     led = await sql("select reason, sum(delta) s, count(*) n from ledger where user_id = :u group by reason order by reason",
                     {"u": me["id"]})

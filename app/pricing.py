@@ -48,5 +48,5 @@ SERVICE_SELECT = """
       join provider_services ps
         on ps.provider_id = s.provider_id and ps.provider_service_id = s.provider_service_id
       join providers p on p.id = s.provider_id
-     where s.active and p.active
+     where s.active and not s.hidden and p.active
 """

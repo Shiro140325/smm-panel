@@ -87,6 +87,7 @@ create table if not exists services (
 -- upgrades for databases created before the full-catalog import
 alter table services add column if not exists category text;
 alter table services add column if not exists auto boolean not null default false;
+alter table services add column if not exists hidden boolean not null default false;   -- hidden by the owner in /admin
 alter table services alter column markup_pct drop not null;
 alter table services alter column markup_pct drop default;
 create unique index if not exists services_auto_psid on services (provider_id, provider_service_id) where auto;

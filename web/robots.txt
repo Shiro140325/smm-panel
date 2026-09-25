@@ -6,5 +6,6 @@ Disallow: /orders
 Disallow: /topups
 Disallow: /webhooks/
 Disallow: /fx
+Disallow: /admin/
 
 Sitemap: https://smmshiro.com/sitemap.xml

@@ -16,7 +16,7 @@ from starlette.datastructures import Headers
 
 from app import fx
 from app.config import get_settings
-from app.routers import auth, orders, services, topups, webhooks
+from app.routers import admin, auth, orders, services, topups, webhooks
 from app.workers.sync import run_sync_once
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -52,7 +52,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for r in (auth.router, services.router, orders.router, topups.router, webhooks.router):
+for r in (auth.router, services.router, orders.router, topups.router, webhooks.router, admin.router):
     app.include_router(r)
 
 

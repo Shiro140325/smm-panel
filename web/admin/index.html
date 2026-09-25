@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Control panel — SMM Shiro</title>
+<meta name="theme-color" content="#F4F4F4">
+<script>/* apply saved theme before first paint */(function(){try{var t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap">
+<link rel="icon" href="/favicon.ico?v=3" sizes="any">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=3">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<!-- sign in -->
+<div class="theme-corner hidden" id="login-theme"><button class="theme-btn" type="button" data-theme-toggle aria-label="Theme"></button></div>
+<main class="auth-page hidden" id="login">
+  <form class="card auth-card" id="login-form" novalidate>
+    <a class="brand brand-lg" href="/" aria-label="SMM Shiro home" style="align-self:center"><img class="logo-ink" src="/assets/img/logo.png" alt="SMM Shiro" width="132" height="44"></a>
+    <div style="text-align:center"><span class="kicker">Control panel</span></div>
+    <div class="field">
+      <label for="admin-pass">Admin password</label>
+      <input class="input" id="admin-pass" type="password" autocomplete="current-password" required>
+    </div>
+    <div class="alert alert-bad hidden" id="login-error" role="alert"></div>
+    <button class="btn btn-primary btn-lg btn-block" type="submit" id="login-btn">Open control panel</button>
+  </form>
+</main>
+
+<!-- panel -->
+<div class="app hidden" id="panel">
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="SMM Shiro home"><img src="/assets/img/logo-white.png" alt="SMM Shiro" width="132" height="44"></a>
+    <span class="bal">Admin</span>
+    <button class="theme-btn" type="button" data-theme-toggle aria-label="Theme"></button>
+    <button class="icon-btn" type="button" data-logout aria-label="Log out"></button>
+  </header>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="SMM Shiro home"><img src="/assets/img/logo-white.png" alt="SMM Shiro" width="132" height="44"></a>
+    <div class="balance-card"><div class="k">Control panel</div><div class="v" style="font-size:22px">Owner</div></div>
+    <nav class="side-nav" aria-label="Control panel">
+      <a href="#overview" data-nav="overview"><span data-icon="layers"></span>Overview</a>
+      <a href="#orders" data-nav="orders"><span data-icon="list"></span>Orders</a>
+      <a href="#customers" data-nav="customers"><span data-icon="user"></span>Customers</a>
+      <a href="#topups" data-nav="topups"><span data-icon="wallet"></span>Top-ups</a>
+      <a href="#services" data-nav="services"><span data-icon="grid"></span>Services</a>
+    </nav>
+    <div class="side-user">
+      <div class="avatar" aria-hidden="true">A</div>
+      <div class="email">Admin</div>
+      <button class="theme-btn" type="button" data-theme-toggle aria-label="Theme"></button>
+      <button class="icon-btn" type="button" data-logout aria-label="Log out"></button>
+    </div>
+  </aside>
+  <main class="main" id="view" aria-live="polite"></main>
+  <nav class="tabbar tabbar-5" aria-label="Control panel">
+    <a href="#overview" data-nav="overview"><span data-icon="layers"></span>Overview</a>
+    <a href="#orders" data-nav="orders"><span data-icon="list"></span>Orders</a>
+    <a href="#customers" data-nav="customers"><span data-icon="user"></span>Customers</a>
+    <a href="#topups" data-nav="topups"><span data-icon="wallet"></span>Top-ups</a>
+    <a href="#services" data-nav="services"><span data-icon="grid"></span>Services</a>
+  </nav>
+</div>
+<script type="module" src="/assets/admin.js"></script>
+</body>
+</html>
