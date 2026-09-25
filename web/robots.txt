@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+# account, order and payment endpoints: nothing for search engines there
+Disallow: /auth/
+Disallow: /orders
+Disallow: /topups
+Disallow: /webhooks/
+Disallow: /fx
+
+Sitemap: https://smmshiro.com/sitemap.xml
