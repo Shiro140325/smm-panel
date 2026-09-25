@@ -78,4 +78,8 @@ function renderHero() {
   renderTabs(platforms);
   renderTable();
   renderHero();
+  try {
+    const { total } = await api("/services/count");
+    if (total > services.length) document.getElementById("service-count").textContent = `all ${num(total)} services`;
+  } catch { /* keep the generic wording */ }
 })();

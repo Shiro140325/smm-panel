@@ -62,3 +62,14 @@ async def list_services(platform: str | None = None, featured: bool = False, db:
     rows = [item for _, item in sorted(rows, key=lambda x: x[0])]
     _cache[key] = (time.monotonic(), rows)
     return rows
+
+
+@router.get("/count")
+async def count_services(db: DB = Depends(get_db)):
+    """How many services customers can order (the landing page links to the full list with this)."""
+    hit = _cache.get(("count",))
+    if hit and time.monotonic() - hit[0] < _CACHE_TTL:
+        return hit[1]
+    out = {"total": await db.fetch_val(f"select count(*) from ({SERVICE_SELECT}) x")}
+    _cache[("count",)] = (time.monotonic(), out)
+    return out
