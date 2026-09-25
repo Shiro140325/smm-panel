@@ -61,6 +61,8 @@ function route() {
   return { name: ["new", "mass", "orders", "funds"].includes(name) ? name : "new", params: new URLSearchParams(qs || "") };
 }
 
+let servicesReady = false, servicesLoad = Promise.resolve();
+
 function render() {
   const { name, params } = route();
   document.querySelectorAll("[data-nav]").forEach((a) => {
@@ -68,6 +70,10 @@ function render() {
     else a.removeAttribute("aria-current");
   });
   clearTimeout(state.ordersTimer);
+  if (!servicesReady && (name === "new" || name === "mass")) {
+    servicesLoad.then(() => { if (route().name === name) render(); });
+    return;
+  }
   if (name === "new") renderNew();
   else if (name === "mass") renderMass();
   else if (name === "orders") renderOrders();
@@ -838,6 +844,12 @@ function renderFunds(params) {
 /* ----------------------------------------------------------------- boot */
 
 (async () => {
+  // start the service list right away, alongside the account check (it's the slow one)
+  servicesLoad = api("/services").catch(() => []).then((list) => {
+    state.services = list;
+    indexServices();
+    servicesReady = true;
+  });
   try {
     await refreshMe();
   } catch (e) {
@@ -845,9 +857,5 @@ function renderFunds(params) {
     view.innerHTML = `<div class="card empty">${esc(e.message)}</div>`;
     return;
   }
-  try {
-    state.services = await api("/services");
-  } catch { state.services = []; }
-  indexServices();
-  render();
+  render();   // Orders and Add funds draw now; New order and Mass order draw when the list arrives
 })();

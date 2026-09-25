@@ -221,6 +221,11 @@ async def run_sync_once() -> None:
     except Exception:
         log.exception("reconcile_pending_topups failed")
     try:
+        from app.routers.services import warm_cache
+        await warm_cache()   # rebuild the priced service lists so page loads never wait for it
+    except Exception:
+        log.exception("services cache warm failed")
+    try:
         n = await expire_stale_topups()   # unpaid for 10 minutes: close the checkout
         if n:
             log.info("expired %d unpaid top-up(s)", n)

@@ -1,18 +1,29 @@
+import asyncio
+import gzip
+import hashlib
+import json
+import logging
 import os
 import time
 import unicodedata
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request, Response
 
 from app.catalog import NON_DROP, NON_DROP_DAYS
-from app.db import DB, get_db
+from app.db import DB, get_db, transaction
 from app.pricing import SERVICE_SELECT, price_per_1k_php
 
 router = APIRouter(prefix="/services", tags=["services"])
+log = logging.getLogger("services")
 
-# The full catalog is thousands of rows; cache the priced list briefly per query shape.
+# The full catalog is thousands of rows (~2 MB of JSON). Encoding and compressing it took seconds,
+# so the finished response is cached: JSON bytes, their gzip, and an ETag, per query shape.
+# After _CACHE_TTL a request still gets the cached copy while a fresh one is built in the
+# background; only a missing (or, with TTL 0 in tests, any) cache entry is built inline.
 _CACHE_TTL = float(os.environ.get("SERVICES_CACHE_SECONDS", "60"))
-_cache: dict[tuple, tuple[float, list]] = {}
+_cache: dict[tuple, tuple] = {}
+_built: dict[tuple, tuple[float, bytes, bytes, str]] = {}
+_refreshing: set[tuple] = set()
 
 
 def _row(r) -> dict:
@@ -39,12 +50,7 @@ def _row(r) -> dict:
     }
 
 
-@router.get("")
-async def list_services(platform: str | None = None, featured: bool = False, db: DB = Depends(get_db)):
-    key = (platform, featured)
-    hit = _cache.get(key)
-    if hit and time.monotonic() - hit[0] < _CACHE_TTL:
-        return hit[1]
+async def _rows(db: DB, platform: str | None, featured: bool) -> list[dict]:
     sql = SERVICE_SELECT
     params = {}
     if platform:
@@ -59,9 +65,53 @@ async def list_services(platform: str | None = None, featured: bool = False, db:
         rank = (r["platform"], 0, r["sort"], r["id"]) if not r["auto"] else \
             (r["platform"], 1, item["category"] or "", item["price_per_1k_php"], r["id"])
         rows.append((rank, item))
-    rows = [item for _, item in sorted(rows, key=lambda x: x[0])]
-    _cache[key] = (time.monotonic(), rows)
-    return rows
+    return [item for _, item in sorted(rows, key=lambda x: x[0])]
+
+
+async def _build(key: tuple, db: DB | None = None) -> tuple[float, bytes, bytes, str]:
+    if db is None:
+        async with transaction() as own:
+            rows = await _rows(own, *key)
+    else:
+        rows = await _rows(db, *key)
+    body = json.dumps(rows, separators=(",", ":"), ensure_ascii=False, default=str).encode()
+    entry = (time.monotonic(), body, gzip.compress(body, 9), '"' + hashlib.md5(body).hexdigest() + '"')
+    _built[key] = entry
+    return entry
+
+
+async def _refresh(key: tuple):
+    try:
+        await _build(key)
+    except Exception:
+        log.exception("services cache refresh failed for %s", key)
+    finally:
+        _refreshing.discard(key)
+
+
+async def warm_cache():
+    """Build the lists the site asks for, so no visitor waits for the first build (called by the sync)."""
+    for key in ((None, False), (None, True)):
+        await _build(key)
+
+
+@router.get("")
+async def list_services(request: Request, platform: str | None = None, featured: bool = False,
+                        db: DB = Depends(get_db)):
+    key = (platform, featured)
+    entry = _built.get(key)
+    if entry is None or _CACHE_TTL <= 0:
+        entry = await _build(key, db)
+    elif time.monotonic() - entry[0] >= _CACHE_TTL and key not in _refreshing:
+        _refreshing.add(key)
+        asyncio.create_task(_refresh(key))   # serve this copy; the next request gets the fresh one
+    _, body, gz, etag = entry
+    headers = {"ETag": etag, "Cache-Control": "no-cache", "Vary": "Accept-Encoding"}
+    if etag in request.headers.get("if-none-match", ""):
+        return Response(status_code=304, headers=headers)   # browser's copy is current: nothing to send
+    if "gzip" in request.headers.get("accept-encoding", ""):
+        return Response(gz, media_type="application/json", headers={**headers, "Content-Encoding": "gzip"})
+    return Response(body, media_type="application/json", headers=headers)
 
 
 @router.get("/count")
