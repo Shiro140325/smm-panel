@@ -85,6 +85,17 @@ async def pm_get(sid: str):
     return {"data": {"id": sid, "attributes": PM["sessions"][sid]}}
 
 
+@app.post("/v1/checkout_sessions/{sid}/expire")
+async def pm_expire(sid: str):
+    s = PM["sessions"].get(sid)
+    if s is None:
+        return JSONResponse({"errors": [{"detail": "not found"}]}, status_code=404)
+    if s.get("payments"):
+        return JSONResponse({"errors": [{"detail": "session already paid"}]}, status_code=400)
+    s["status"] = "expired"
+    return {"data": {"id": sid, "attributes": s}}
+
+
 @app.post("/_pm_pay")
 async def pm_pay(sid: str = Form(...), amount_php: int = Form(...), source: str = Form("gcash")):
     PM["sessions"].setdefault(sid, {"payments": []})["payments"] = [

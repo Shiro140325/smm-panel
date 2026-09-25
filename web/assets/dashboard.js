@@ -689,16 +689,44 @@ async function loadTopups() {
   let items = [];
   try { items = await api("/topups"); } catch { el.innerHTML = `<p class="muted">Couldn't load top-ups.</p>`; return []; }
   el.innerHTML = items.length ? items.map((t) => {
-    const credited = t.status === "credited";
+    const [label, cls] = TOPUP_STATUS[t.status] || [t.status, "badge-pending"];
+    const open = t.status === "pending";
+    const mins = open ? Math.max(0, Math.ceil((new Date(t.expires_at) - Date.now()) / 60000)) : 0;
     return `<div class="topup-item">
       <div style="display:flex;align-items:center;gap:10px"><span style="flex:1;font-weight:700">${peso(t.amount_php)}</span>
-        <span class="badge ${credited ? "badge-completed" : "badge-pending"}">${credited ? "Credited" : "Awaiting payment"}</span></div>
-      <div class="hint">${esc(METHOD_LABEL[t.method] || t.method)} · ${fmtDate(t.created_at)}</div>
-      ${!credited && t.checkout_url ? `<a href="${esc(t.checkout_url)}" style="font-size:13px;font-weight:600">Resume payment</a>` : ""}
+        <span class="badge ${cls}">${label}</span></div>
+      <div class="hint">${esc(METHOD_LABEL[t.method] || t.method)} · ${fmtDate(t.created_at)}${open ? ` · closes in ${mins} min` : ""}</div>
+      ${open ? `<div class="topup-actions">
+        ${t.checkout_url ? `<a class="btn btn-secondary btn-sm" href="${esc(t.checkout_url)}">Resume payment</a>` : ""}
+        <button type="button" class="btn btn-ghost btn-sm" data-cancel-topup="${esc(t.id)}">Cancel</button>
+      </div>` : ""}
     </div>`;
   }).join("") : `<p class="muted" style="font-size:14px">No top-ups yet.</p>`;
+  el.querySelectorAll("[data-cancel-topup]").forEach((b) => b.addEventListener("click", async () => {
+    b.disabled = true;
+    b.textContent = "Canceling…";
+    try {
+      const r = await api(`/topups/${encodeURIComponent(b.dataset.cancelTopup)}/cancel`, { method: "POST" });
+      if (r.status === "credited") {
+        toast("That payment had already gone through, so it was added to your balance.");
+        await refreshMe().catch(() => {});
+      } else toast("Top-up canceled");
+    } catch (e) { toast(e.message, { bad: true }); }
+    loadTopups();
+  }));
+  // close the list's open top-ups on time, and keep the countdown fresh
+  clearTimeout(topupTimer);
+  if (items.some((t) => t.status === "pending")) topupTimer = setTimeout(() => { if (route().name === "funds") loadTopups(); }, 30000);
   return items;
 }
+
+let topupTimer;
+const TOPUP_STATUS = {
+  credited: ["Credited", "badge-completed"],
+  pending: ["Awaiting payment", "badge-pending"],
+  canceled: ["Canceled", "badge-partial"],
+  expired: ["Expired", "badge-partial"],
+};
 
 async function pollAfterPayment(topupId) {
   const banner = document.getElementById("funds-banner");

@@ -11,7 +11,7 @@ from app import fx
 from app.catalog import import_catalog
 from app.config import get_settings
 from app.db import transaction
-from app.payments import reconcile_pending_topups
+from app.payments import expire_stale_topups, reconcile_pending_topups
 from app.providers.smm_client import SMMClient
 
 log = logging.getLogger("sync")
@@ -220,3 +220,9 @@ async def run_sync_once() -> None:
             log.info("credited %d top-up(s) via checkout lookup", n)
     except Exception:
         log.exception("reconcile_pending_topups failed")
+    try:
+        n = await expire_stale_topups()   # unpaid for 10 minutes: close the checkout
+        if n:
+            log.info("expired %d unpaid top-up(s)", n)
+    except Exception:
+        log.exception("expire_stale_topups failed")

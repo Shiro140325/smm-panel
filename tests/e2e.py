@@ -231,6 +231,43 @@ async def main():
     check("sync reconcile credits; late webhook doesn't double", round(bal2 - bal1, 2) == 150, (bal1, bal2))
     r = await c2.post(f"/topups/{j['topup_id']}/check")
     check("other user can't check my top-up", r.status_code in (401, 404), r.text)
+
+    # --- cancel / auto-expire unpaid top-ups
+    async def new_topup(amount):
+        tid = (await c.post("/topups", json={"amount_php": amount})).json()["topup_id"]
+        sid = (await sql("select checkout_id from topups where id = CAST(:id AS uuid)", {"id": tid}))[0]["checkout_id"]
+        return tid, sid
+    status_of = lambda tid: sql("select status from topups where id = CAST(:id AS uuid)", {"id": tid})
+    t3, s3 = await new_topup(200)
+    r = await c2.post(f"/topups/{t3}/cancel")
+    check("other user can't cancel my top-up", r.status_code in (401, 404), r.text)
+    r = await c.post(f"/topups/{t3}/cancel")
+    sess = (await m2.get(f"/v1/checkout_sessions/{s3}")).json()["data"]["attributes"]
+    check("cancel closes the top-up and expires the checkout", r.json().get("status") == "canceled"
+          and (await status_of(t3))[0]["status"] == "canceled" and sess.get("status") == "expired", (r.text, sess))
+    bal_a = (await c.get("/auth/me")).json()["balance_php"]
+    await m2.post("/_pm_pay", data={"sid": s3, "amount_php": 200})   # money arrives anyway (e.g. mid-cancel)
+    await run_sync_once()
+    bal_b = (await c.get("/auth/me")).json()["balance_php"]
+    check("payment after cancel is still credited", round(bal_b - bal_a, 2) == 200 and (await status_of(t3))[0]["status"] == "credited", (bal_a, bal_b))
+
+    t4, s4 = await new_topup(120)
+    await m2.post("/_pm_pay", data={"sid": s4, "amount_php": 120})   # paid, webhook not in yet
+    r = await c.post(f"/topups/{t4}/cancel")
+    bal_c = (await c.get("/auth/me")).json()["balance_php"]
+    check("cancelling a paid top-up credits it instead", r.json().get("status") == "credited" and round(bal_c - bal_b, 2) == 120, (r.text, bal_b, bal_c))
+
+    t5, _ = await new_topup(130)
+    await sql("update topups set created_at = now() - interval '11 minutes' where id = CAST(:id AS uuid)", {"id": t5})
+    t6, _ = await new_topup(140)
+    lst = {t["id"]: t for t in (await c.get("/topups")).json()}
+    check("unpaid after 10 minutes → expired; newer ones stay open", lst[t5]["status"] == "expired"
+          and lst[t6]["status"] == "pending" and lst[t6]["expires_at"], (lst[t5], lst[t6]))
+    await sql("update topups set created_at = now() - interval '11 minutes' where id = CAST(:id AS uuid)", {"id": t6})
+    await run_sync_once()
+    check("background sync expires stale top-ups too", (await status_of(t6))[0]["status"] == "expired")
+    r = await c.post(f"/topups/{t5}/cancel")
+    check("cancel on a closed top-up is a no-op", r.json().get("status") == "expired", r.text)
     await m2.aclose()
 
     # --- live status: GET /orders pulls fresh provider status (no background sync)

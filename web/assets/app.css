@@ -373,6 +373,10 @@ section.block h2 { font-size: clamp(30px, 3.4vw, 40px); }
 .summary { background: var(--bg); border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; font-size: 15px; }
 .summary div { display: flex; justify-content: space-between; gap: 12px; }
 .topup-item { padding: 13px 0; border-top: 1px solid var(--line-2); display: flex; flex-direction: column; gap: 5px; }
+.topup-actions { display: flex; gap: 8px; margin-top: 4px; }
+.btn-sm { min-height: 36px; padding: 6px 12px; font-size: 13px; border-radius: 8px; }
+.btn-ghost.btn-sm { border-color: var(--line); }
+.btn-ghost.btn-sm:hover { border-color: var(--ink); }
 
 /* Mobile top bar + bottom tabs (hidden on desktop) */
 .topbar, .tabbar { display: none; }
