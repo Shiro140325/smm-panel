@@ -207,8 +207,8 @@ async def main():
     j = r.json()
     check("create checkout", r.status_code == 200 and j["checkout_url"].startswith("https://checkout.example/"), r.text)
     sent = (await m2.get("/_pm_last_create")).json()["data"]["attributes"]
-    check("checkout payload: ₱300, gcash+paymaya, return URL", sent["line_items"][0]["amount"] == 30000
-          and sent["payment_method_types"] == ["gcash", "paymaya"] and "/dashboard/#funds?status=success" in sent["success_url"], sent)
+    check("checkout payload: ₱300, QR Ph, return URL", sent["line_items"][0]["amount"] == 30000
+          and sent["payment_method_types"] == ["qrph"] and "/dashboard/#funds?status=success" in sent["success_url"], sent)
     r = await c.post(f"/topups/{j['topup_id']}/check")
     check("check before paying → pending", r.json().get("status") == "pending", r.text)
     sid = (await sql("select checkout_id from topups where id = CAST(:id AS uuid)", {"id": j["topup_id"]}))[0]["checkout_id"]

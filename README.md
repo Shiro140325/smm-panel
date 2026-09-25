@@ -1,6 +1,6 @@
 # SMM Panel API
 
-FastAPI backend for an SMM reseller panel: wallet top-ups via PayMongo (GCash/Maya), orders routed to upstream SMM providers (standard API v2), background status/refill/catalog sync, and a double-entry-style ledger.
+FastAPI backend for an SMM reseller panel: wallet top-ups via PayMongo (QR Ph: GCash, Maya, bank apps), orders routed to upstream SMM providers (standard API v2), background status/refill/catalog sync, and a double-entry-style ledger.
 
 ## Stack
 

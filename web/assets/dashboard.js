@@ -774,7 +774,7 @@ function renderFunds(params) {
           <div style="border-top:1px solid var(--line);padding-top:10px"><span class="muted">New balance</span><span style="font-family:var(--font-display);font-weight:700;font-size:20px" id="sum-new"></span></div>
         </div>
         <button class="btn btn-primary btn-lg btn-block" id="pay" type="submit"></button>
-        <p class="hint" style="text-align:center">You'll pick GCash or Maya and pay on PayMongo's secure checkout. Your balance updates as soon as the payment is confirmed, usually within a minute.</p>
+        <p class="hint" style="text-align:center">You'll pay by QR Ph on PayMongo's secure checkout: scan it with GCash, Maya or your bank app. On your phone, save the QR image and upload it in your app. Your balance updates as soon as the payment is confirmed, usually within a minute.</p>
       </form>
       <div class="aside">
         <div class="card details"><h3>Recent top-ups</h3><div id="topups"><p class="muted" style="font-size:14px">Loading…</p></div></div>

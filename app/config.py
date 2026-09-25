@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     paymongo_secret_key: str = ""
     paymongo_webhook_secret: str = ""
-    paymongo_methods: str = "gcash,paymaya"   # shown on PayMongo checkout; must be enabled on your account
+    paymongo_methods: str = "qrph"   # shown on PayMongo checkout; must be activated on your account (live mode: QR Ph only for now)
 
     @property
     def paymongo_method_list(self) -> list[str]:
