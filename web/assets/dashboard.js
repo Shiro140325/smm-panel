@@ -764,19 +764,33 @@ async function loadOrders() {
   const qs = new URLSearchParams();
   if (state.ordersFilter) qs.set("status", state.ordersFilter);
   if (state.ordersQuery.trim()) qs.set("q", state.ordersQuery.trim());
+  const stamp = document.getElementById("orders-updated");
+  const key = qs.toString();
   let orders;
   try {
-    orders = await api("/orders" + (qs.toString() ? `?${qs}` : ""));
+    orders = await api("/orders" + (key ? `?${key}` : ""));
   } catch (ex) {
+    // a failed background refresh keeps the rows on screen (and the reader's place in them)
+    if (tbody.dataset.key === key && tbody.dataset.sig) { if (stamp) stamp.textContent = "Couldn't update, retrying"; return null; }
     tbody.innerHTML = `<tr><td colspan="8" class="empty">${esc(ex.message)}</td></tr>`;
+    delete tbody.dataset.sig;
     return null;
   }
-  const stamp = document.getElementById("orders-updated");
+  if (!document.body.contains(tbody)) return orders;   // left the page while loading
   if (stamp) stamp.textContent = `Updated ${new Date().toLocaleTimeString("en-PH", { hour: "numeric", minute: "2-digit", second: "2-digit" })}`;
+  // nothing changed since the last refresh: leave the rows alone, so scrolling is never disturbed
+  const sig = JSON.stringify(orders);
+  if (tbody.dataset.key === key && tbody.dataset.sig === sig) return orders;
+  tbody.dataset.key = key;
+  tbody.dataset.sig = sig;
   if (!orders.length) {
     tbody.innerHTML = `<tr><td colspan="8" class="empty">${state.ordersFilter || state.ordersQuery ? "No orders match." : `No orders yet. <a href="#new">Place your first order</a>.`}</td></tr>`;
     return orders;
   }
+  // swapping the rows must not move the page (Safari can jump to the top when content is replaced)
+  const y = window.scrollY;
+  const card = tbody.closest(".orders-card");
+  if (card) card.style.minHeight = `${card.offsetHeight}px`;
   tbody.innerHTML = orders.map((o) => {
     const [label, cls] = STATUS[o.status] || [o.status, "badge-pending"];
     return `<tr>
@@ -792,6 +806,8 @@ async function loadOrders() {
       <td data-col="refill">${refillCell(o)}</td>
     </tr>`;
   }).join("");
+  if (window.scrollY !== y) window.scrollTo(0, y);
+  if (card) requestAnimationFrame(() => { card.style.minHeight = ""; });
   tbody.querySelectorAll("[data-refill]").forEach((b) => b.addEventListener("click", async () => {
     b.disabled = true;
     try {
