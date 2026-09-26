@@ -262,3 +262,31 @@ export function rememberRef() {
   try { if (ref && /^[a-z0-9]{4,32}$/i.test(ref)) localStorage.setItem("ref", ref.toLowerCase()); } catch { /* private mode */ }
   try { return localStorage.getItem("ref") || ref || ""; } catch { return ref || ""; }
 }
+
+/* ------------------------------------------------------------------ announcement bar
+   One short line set from /admin, shown at the very top. Visitors can hide it; a new text shows again. */
+export async function showAnnouncement() {
+  let a;
+  try { a = await api("/announcement"); } catch { return; }
+  const text = (a && a.text) || "";
+  let hidden = null;
+  try { hidden = localStorage.getItem("announce-hidden"); } catch { /* private mode */ }
+  if (!text || hidden === text || document.querySelector(".announce")) return;
+  const bar = document.createElement("div");
+  bar.className = "announce";
+  bar.setAttribute("role", "status");
+  bar.innerHTML = `<span class="announce-text">${esc(text)}</span>
+    <button type="button" class="announce-x" aria-label="Hide announcement">&times;</button>`;
+  // fixed corner buttons (login page) move down by the bar's height
+  const root = document.documentElement.style;
+  const measure = () => root.setProperty("--announce-h", `${bar.isConnected ? bar.offsetHeight : 0}px`);
+  bar.querySelector(".announce-x").addEventListener("click", () => {
+    try { localStorage.setItem("announce-hidden", text); } catch { /* private mode */ }
+    bar.remove();
+    measure();
+    removeEventListener("resize", measure);
+  });
+  document.body.prepend(bar);
+  measure();
+  addEventListener("resize", measure);
+}

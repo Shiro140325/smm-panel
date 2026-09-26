@@ -124,7 +124,44 @@ async function renderOverview() {
       <table class="table"><thead><tr><th>Sales</th><th class="num">Orders</th><th class="num">Charged (after refunds)</th><th class="num">SMMGen cost</th><th class="num">Profit</th></tr></thead>
       <tbody>${span("today", "Today")}${span("7d", "Last 7 days")}${span("all", "All time")}</tbody></table>
     </div></div>
-    <p class="hint">Cost is what SMMGen reports charging per order, converted at ₱${Number(d.usd_to_php).toFixed(2)}/USD. "Today" is Philippine time.</p>`;
+    <p class="hint">Cost is what SMMGen reports charging per order, converted at ₱${Number(d.usd_to_php).toFixed(2)}/USD. "Today" is Philippine time.</p>
+    <div class="card panel" id="announce-card" style="margin-top:18px">
+      <h3>Announcement bar</h3>
+      <p class="hint" style="margin:0">One short line in a gray bar at the top of every page. Leave it empty to hide the bar.</p>
+      <textarea class="textarea" id="announce-text" rows="2" placeholder="e.g. New: ₱15 free credit when you sign up!"></textarea>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span class="hint" id="announce-count" style="flex:1"></span>
+        <button type="button" class="btn btn-secondary" id="announce-clear">Remove bar</button>
+        <button type="button" class="btn btn-primary" id="announce-save">Save</button>
+      </div>
+    </div>`;
+  setupAnnouncement();
+}
+
+async function setupAnnouncement() {
+  const box = $("announce-text"), count = $("announce-count");
+  if (!box) return;
+  let a;
+  try { a = await call("/admin/api/announcement"); } catch (e) { count.textContent = e.message; return; }
+  const max = a.max_chars;
+  box.maxLength = max;
+  box.value = a.text;
+  const paint = () => {
+    const n = box.value.replace(/\s+/g, " ").trim().length;
+    count.textContent = `${n} / ${max} characters (spaces count)${a.text ? ` · live since ${fmtDate(a.updated_at)}` : " · not showing"}`;
+  };
+  box.addEventListener("input", paint);
+  paint();
+  const save = async (text) => {
+    try {
+      a = await call("/admin/api/announcement", { method: "PUT", body: { text } });
+      box.value = a.text;
+      paint();
+      toast(a.text ? "Announcement is live" : "Announcement bar removed");
+    } catch (e) { toast(e.message, { bad: true }); }
+  };
+  $("announce-save").onclick = () => save(box.value);
+  $("announce-clear").onclick = () => save("");
 }
 
 /* ------------------------------------------------------------ orders */

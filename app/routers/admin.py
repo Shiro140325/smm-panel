@@ -13,7 +13,7 @@ import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from app import fx
+from app import announcement, fx
 from app.config import get_settings
 from app.db import DB, get_db
 from app.providers.smm_client import SMMClient
@@ -259,3 +259,18 @@ async def set_hidden(service_id: int, body: HiddenIn, db: DB = Depends(get_db)):
     services_router._built.clear()   # customers see the change on their next load
     services_router._cache.clear()
     return {"ok": True}
+
+
+class AnnouncementIn(BaseModel):
+    text: str = Field(default="", max_length=announcement.MAX_CHARS)
+
+
+@router.get("/announcement", dependencies=[Depends(require_admin)])
+async def get_announcement(db: DB = Depends(get_db)):
+    return {**await announcement.read(db), "max_chars": announcement.MAX_CHARS}
+
+
+@router.put("/announcement", dependencies=[Depends(require_admin)])
+async def set_announcement(body: AnnouncementIn, db: DB = Depends(get_db)):
+    """Empty text removes the bar."""
+    return {**await announcement.save(db, body.text), "max_chars": announcement.MAX_CHARS}

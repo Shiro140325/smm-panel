@@ -1,10 +1,11 @@
 import {
-  api, esc, fmtDate, initTheme, num, orderCharge, peso, PLATFORMS, PLATFORM_ORDER, refillText, enhanceSelect, tierBadge, toast,
+  api, esc, fmtDate, initTheme, showAnnouncement, num, orderCharge, peso, PLATFORMS, PLATFORM_ORDER, refillText, enhanceSelect, tierBadge, toast,
 } from "./common.js";
 import { icons } from "./icons.js";
 import { startTour } from "./tour.js";
 
 initTheme(icons);
+showAnnouncement();
 
 const view = document.getElementById("view");
 const state = {

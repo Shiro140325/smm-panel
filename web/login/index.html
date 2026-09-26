@@ -44,9 +44,10 @@
   </div>
 </main>
 <script type="module">
-  import { api, initTheme, rememberRef } from "/assets/common.js";
+  import { api, initTheme, rememberRef, showAnnouncement } from "/assets/common.js";
   import { icons } from "/assets/icons.js";
   initTheme(icons);
+  showAnnouncement();
 
   const params = new URLSearchParams(location.search);
   const ref = rememberRef();

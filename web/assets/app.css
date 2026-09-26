@@ -444,7 +444,7 @@ section.block h2 { font-size: clamp(30px, 3.4vw, 40px); }
 .theme-btn:hover { color: var(--ink); border-color: var(--border-strong); }
 .sidebar .theme-btn, .topbar .theme-btn { background: none; border-color: transparent; color: var(--dark-muted); }
 .sidebar .theme-btn:hover, .topbar .theme-btn:hover { color: #fff; background: #1D2027; }
-.theme-corner { position: fixed; top: 16px; right: 16px; }
+.theme-corner { position: fixed; top: calc(16px + var(--announce-h, 0px)); right: 16px; }   /* sits below the announcement bar */
 
 /* The dark "ink" logo becomes white in dark mode (the white logo on dark chrome stays as is) */
 :root[data-theme="dark"] .logo-ink { filter: invert(1) brightness(1.1); }
@@ -757,3 +757,15 @@ a.pill { text-decoration: none; }
   .recent-table td[data-col="took"]::before { content: "Delivered in "; color: var(--muted); }
   .recent-table td[data-col="when"] { grid-column: 1 / -1; font-size: 13px; }
 }
+
+/* Announcement bar (set from /admin) */
+:root { --announce-bg: #D9D9D9; --announce-ink: #0B0B0B; }
+:root[data-theme="dark"] { --announce-bg: #2E2E2E; --announce-ink: #EDEDED; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --announce-bg: #2E2E2E; --announce-ink: #EDEDED; } }
+.announce { position: relative; background: var(--announce-bg); color: var(--announce-ink); font-size: 14px; font-weight: 600;
+  line-height: 1.4; text-align: center; padding: 9px 48px; }
+.announce-text { overflow-wrap: anywhere; }
+.announce-x { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); width: 32px; height: 32px; border: 0; border-radius: 8px;
+  background: transparent; color: inherit; font-size: 22px; line-height: 1; cursor: pointer; opacity: .6; }
+.announce-x:hover { opacity: 1; background: rgba(0, 0, 0, .06); }
+@media (max-width: 760px) { .announce { font-size: 13px; padding: 8px 44px 8px 16px; text-align: left; } }

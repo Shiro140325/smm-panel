@@ -421,6 +421,18 @@ async def main():
     await ca.post("/admin/api/services/1/hidden", json={"hidden": False})
     check("admin: showing it again", 1 in [x["id"] for x in (await c.get("/services")).json()])
 
+    # --- announcement bar
+    check("announcement: none by default", (await c.get("/announcement")).json()["text"] == "")
+    r = await ca.put("/admin/api/announcement", json={"text": "  New:  ₱15 free credit\n on sign-up!  "})
+    check("announcement: saved as one tidy line", r.json()["text"] == "New: ₱15 free credit on sign-up!" and r.json()["max_chars"] == 140, r.text)
+    check("announcement: everyone sees it right away", (await c.get("/announcement")).json()["text"] == "New: ₱15 free credit on sign-up!")
+    r = await ca.put("/admin/api/announcement", json={"text": "x" * 141})
+    check("announcement: over 140 characters refused", r.status_code == 422, r.status_code)
+    r = await c.put("/admin/api/announcement", json={"text": "hacked"})
+    check("announcement: customers can't change it", r.status_code == 401 and (await c.get("/announcement")).json()["text"].startswith("New:"), r.status_code)
+    await ca.put("/admin/api/announcement", json={"text": ""})
+    check("announcement: empty removes the bar", (await c.get("/announcement")).json()["text"] == "")
+
     await ca.post("/admin/api/logout")
     r = await ca.get("/admin/api/overview")
     check("admin: logout ends the session", r.status_code == 401, r.text)

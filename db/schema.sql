@@ -137,3 +137,10 @@ create table if not exists provider_refills (
 );
 create index if not exists provider_refills_sync on provider_refills (provider_id, status);
 create unique index if not exists provider_refills_one_pending on provider_refills (order_id) where status = 'pending';
+
+-- Small site-wide settings edited from /admin (e.g. the announcement bar).
+create table if not exists site_settings (
+  key        text primary key,
+  value      text not null,
+  updated_at timestamptz not null default now()
+);
