@@ -1,9 +1,10 @@
-"""The announcement bar: one short line shown at the top of every page, edited from /admin."""
+"""The announcement bar: one short line at the top of the dashboard (logged-in customers only), edited from /admin."""
 import time
 
 from fastapi import APIRouter, Depends
 
 from app.db import DB, get_db
+from app.security import current_user
 
 MAX_CHARS = 140   # including spaces: one line on a computer, two or three on a phone
 KEY = "announcement"
@@ -31,8 +32,8 @@ async def save(db: DB, text: str) -> dict:
 
 
 @router.get("/announcement")
-async def get_announcement(db: DB = Depends(get_db)):
-    """Public: every page asks for this, so it's cached for 30 seconds (cleared on save)."""
+async def get_announcement(user: dict = Depends(current_user), db: DB = Depends(get_db)):
+    """Logged-in customers only. Every dashboard load asks for this, so it's cached for 30 seconds (cleared on save)."""
     global _cache
     if _cache is None or time.monotonic() - _cache[0] >= 30:
         _cache = (time.monotonic(), await read(db))

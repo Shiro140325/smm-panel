@@ -432,6 +432,8 @@ async def main():
     check("announcement: customers can't change it", r.status_code == 401 and (await c.get("/announcement")).json()["text"].startswith("New:"), r.status_code)
     await ca.put("/admin/api/announcement", json={"text": ""})
     check("announcement: empty removes the bar", (await c.get("/announcement")).json()["text"] == "")
+    r = await httpx.AsyncClient(base_url=API).get("/announcement")
+    check("announcement: only for logged-in customers", r.status_code == 401, r.status_code)
 
     await ca.post("/admin/api/logout")
     r = await ca.get("/admin/api/overview")

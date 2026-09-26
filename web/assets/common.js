@@ -264,7 +264,7 @@ export function rememberRef() {
 }
 
 /* ------------------------------------------------------------------ announcement bar
-   One short line set from /admin, shown at the very top. Visitors can hide it; a new text shows again. */
+   One short line set from /admin, shown at the top of the dashboard (logged in only). Customers can hide it; a new text shows again. */
 export async function showAnnouncement() {
   let a;
   try { a = await api("/announcement"); } catch { return; }
