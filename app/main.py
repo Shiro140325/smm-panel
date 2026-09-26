@@ -9,13 +9,14 @@ from pathlib import Path
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.datastructures import Headers
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import fx
 from app.config import get_settings
-from app.site import ASSET_VERSION
+from app.site import ASSET_VERSION, not_found_page
 from app.routers import account, admin, api_v2, auth, orders, pages, services, topups, webhooks
 from app.workers.sync import run_sync_once
 
@@ -79,7 +80,14 @@ _ASSET_URL = re.compile(r"""((?:/assets/|\./)[\w.-]+\.(?:js|css))(["'])""")
 
 class WebFiles(StaticFiles):
     async def get_response(self, path, scope):
-        response = await super().get_response(path, scope)
+        try:
+            response = await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            # a page that doesn't exist: browsers get the site's 404 page, scripts keep the plain error
+            if exc.status_code == 404 and "text/html" in Headers(scope=scope).get("accept", "") \
+                    and not path.startswith("assets/"):
+                return HTMLResponse(not_found_page(), status_code=404, headers={"Cache-Control": "no-cache"})
+            raise
         response.headers["Cache-Control"] = "no-cache"   # always revalidate (cheap 304 via ETag)
         media = (getattr(response, "media_type", "") or "")
         if response.status_code != 200 or not isinstance(response, FileResponse) \

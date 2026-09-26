@@ -713,3 +713,13 @@ section.block .prose h2 { font-size: 22px; margin-top: 18px; }
 .api-params { font-family: var(--font-mono); font-size: 13px; color: var(--ink); line-height: 1.6; }
 .api-out { margin: 0; font-family: var(--font-mono); font-size: 12.5px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 760px) { .api-ex { grid-template-columns: 1fr; } .copy-row { flex-direction: column; } }
+
+/* 404 page */
+.nf-wrap { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; max-width: 760px; }
+.nf-code { font-family: var(--font-display); font-weight: 700; font-size: clamp(96px, 18vw, 180px); line-height: .9; letter-spacing: -0.04em;
+  color: transparent; -webkit-text-stroke: 2px var(--ink); }
+.nf h1 { font-size: clamp(30px, 4vw, 44px); }
+.nf .lead { font-size: 18px; color: var(--ink-2); max-width: 560px; }
+.nf-cta { margin-top: 8px; }
+.nf-more { margin-top: 28px; display: flex; flex-direction: column; gap: 12px; }
+a.pill { text-decoration: none; }

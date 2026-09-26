@@ -39,7 +39,7 @@ def footer_popular() -> str:
 
 
 def page(*, path: str, title: str, description: str, body: str, jsonld: list | None = None,
-         og_type: str = "website") -> str:
+         og_type: str = "website", noindex: bool = False) -> str:
     url = SITE + path
     ld = f'<script type="application/ld+json">{json.dumps(jsonld, ensure_ascii=False)}</script>\n' if jsonld else ""
     return f"""<!doctype html>
@@ -49,7 +49,7 @@ def page(*, path: str, title: str, description: str, body: str, jsonld: list | N
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{e(title)}</title>
 <meta name="description" content="{e(description)}">
-<link rel="canonical" href="{url}">
+{'<meta name="robots" content="noindex">' if noindex else f'<link rel="canonical" href="{url}">'}
 <meta property="og:type" content="{og_type}">
 <meta property="og:site_name" content="SMM Shiro">
 <meta property="og:locale" content="en_PH">
@@ -93,3 +93,26 @@ def page(*, path: str, title: str, description: str, body: str, jsonld: list | N
 </body>
 </html>
 """
+
+
+def not_found_page() -> str:
+    from app.seo_pages import PAGES
+    links = "".join(f'<a class="pill" href="/{slug}/">{e(p["h1_short"])}</a>' for slug, p in PAGES.items())
+    body = f"""<section class="block nf">
+  <div class="wrap nf-wrap">
+    <span class="nf-code" aria-hidden="true">404</span>
+    <h1>This page doesn't exist.</h1>
+    <p class="lead">The link may be old or mistyped. Everything you need is still a tap away.</p>
+    <div class="hero-cta nf-cta">
+      <a class="btn btn-primary btn-lg" href="/">Go to home page</a>
+      <a class="btn btn-secondary btn-lg" href="/dashboard/">Open dashboard</a>
+    </div>
+    <div class="nf-more">
+      <span class="kicker">Popular services</span>
+      <div class="price-tabs">{links}</div>
+    </div>
+  </div>
+</section>"""
+    return page(path="/404", title="Page not found | SMM Shiro",
+                description="This page doesn't exist. Go to the SMM Shiro home page or your dashboard.",
+                body=body, noindex=True)
