@@ -254,3 +254,11 @@ export function enhanceSelect(sel) {
   sync();
   return { btn, sync, close };
 }
+
+/* ------------------------------------------------------------------ referral
+   A "?ref=CODE" on any page is remembered, so it still applies after browsing to sign up. */
+export function rememberRef() {
+  const ref = new URLSearchParams(location.search).get("ref");
+  try { if (ref && /^[a-z0-9]{4,32}$/i.test(ref)) localStorage.setItem("ref", ref.toLowerCase()); } catch { /* private mode */ }
+  try { return localStorage.getItem("ref") || ref || ""; } catch { return ref || ""; }
+}

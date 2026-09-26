@@ -693,3 +693,23 @@ section.block .prose h2 { font-size: 22px; margin-top: 18px; }
   .seo-table th:nth-child(4), .seo-table td:nth-child(4) { display: none; }
   .seo-table th:first-child, .seo-table td:first-child { display: none; }
 }
+
+/* Dashboard: More (phones), Affiliate, API */
+.more-list { display: flex; flex-direction: column; gap: 10px; }
+.more-item { display: flex; align-items: center; gap: 14px; padding: 16px 18px; text-decoration: none; color: var(--ink); }
+.more-item .grow { display: flex; flex-direction: column; gap: 2px; }
+.more-item .t { font-weight: 700; }
+.more-item .s { font-size: 14px; color: var(--muted); }
+.more-icon { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: var(--surface-2); flex: none; }
+.aff-headline { font-size: clamp(22px, 3vw, 28px); }
+.copy-row { display: flex; gap: 8px; }
+.copy-row .input { flex: 1; min-width: 0; font-size: 14px; }
+.aff-kv, .api-kv { border-top-color: var(--line); }
+.aff-kv .k, .api-kv .k { color: var(--muted); }
+.api-kv .v { overflow-wrap: anywhere; text-align: right; }
+.api-docs { gap: 10px; }
+.api-docs h4 { font-size: 15px; margin: 10px 0 0; }
+.api-ex { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 10px; align-items: start; }
+.api-params { font-family: var(--font-mono); font-size: 13px; color: var(--ink); line-height: 1.6; }
+.api-out { margin: 0; font-family: var(--font-mono); font-size: 12.5px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 760px) { .api-ex { grid-template-columns: 1fr; } .copy-row { flex-direction: column; } }

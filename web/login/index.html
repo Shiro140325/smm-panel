@@ -36,6 +36,7 @@
         <input class="input" id="password" type="password" autocomplete="current-password" minlength="8" required>
         <span class="hint" id="pw-hint">At least 8 characters.</span>
       </div>
+      <div class="alert alert-info hidden" id="ref-hint" role="status">You were invited by a friend. Welcome to SMM Shiro!</div>
       <div class="alert alert-bad hidden" id="auth-error" role="alert"></div>
       <button class="btn btn-primary btn-lg btn-block" id="submit" type="submit">Log in</button>
     </form>
@@ -43,12 +44,13 @@
   </div>
 </main>
 <script type="module">
-  import { api, initTheme } from "/assets/common.js";
+  import { api, initTheme, rememberRef } from "/assets/common.js";
   import { icons } from "/assets/icons.js";
   initTheme(icons);
 
   const params = new URLSearchParams(location.search);
-  let mode = params.get("mode") === "register" ? "register" : "login";
+  const ref = rememberRef();
+  let mode = params.get("mode") === "register" || params.get("ref") ? "register" : "login";
   const $ = (id) => document.getElementById(id);
 
   function setMode(m) {
@@ -58,6 +60,7 @@
     $("submit").textContent = m === "login" ? "Log in" : "Create account";
     $("password").autocomplete = m === "login" ? "current-password" : "new-password";
     $("pw-hint").classList.toggle("hidden", m === "login");
+    $("ref-hint").classList.toggle("hidden", m === "login" || !ref);
     $("auth-error").classList.add("hidden");
     document.title = (m === "login" ? "Log in" : "Create account") + " — SMM Shiro";
   }
@@ -78,7 +81,7 @@
     if (mode === "register" && password.length < 8) { err.textContent = "Password must be at least 8 characters."; err.classList.remove("hidden"); return; }
     $("submit").disabled = true;
     try {
-      await api(mode === "login" ? "/auth/login" : "/auth/register", { method: "POST", body: { email, password } });
+      await api(mode === "login" ? "/auth/login" : "/auth/register", { method: "POST", body: mode === "register" && ref ? { email, password, ref } : { email, password } });
       location.replace("/dashboard/");
     } catch (ex) {
       err.textContent = ex.message;

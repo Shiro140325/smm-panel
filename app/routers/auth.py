@@ -1,5 +1,6 @@
 import logging
 import os
+import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, EmailStr, Field
@@ -29,13 +30,27 @@ class Credentials(BaseModel):
     password: str = Field(min_length=8, max_length=128)
 
 
+class RegisterIn(Credentials):
+    ref: str | None = Field(default=None, max_length=32)   # referral code from the signup link
+
+
+REF_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"   # no look-alikes (0/o, 1/l/i)
+
+
+def new_ref_code() -> str:
+    return "".join(secrets.choice(REF_ALPHABET) for _ in range(8))
+
+
 @router.post("/register")
-async def register(body: Credentials, request: Request, response: Response, db: DB = Depends(get_db)):
+async def register(body: RegisterIn, request: Request, response: Response, db: DB = Depends(get_db)):
     signups_ip.hit(client_ip(request))
+    referrer = None
+    if body.ref:
+        referrer = await db.fetch_val("select id from users where ref_code = :c", {"c": body.ref.strip().lower()})
     try:
         user = await db.fetch_one(
-            "insert into users (email, password_hash) values (:e, :h) returning id, email",
-            {"e": body.email.lower(), "h": hash_password(body.password)},
+            "insert into users (email, password_hash, ref_code, referred_by) values (:e, :h, :c, :r) returning id, email",
+            {"e": body.email.lower(), "h": hash_password(body.password), "c": new_ref_code(), "r": referrer},
         )
     except IntegrityError:
         raise HTTPException(409, "Email already registered")

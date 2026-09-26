@@ -1,8 +1,9 @@
-import { api, esc, initTheme, num, peso, PLATFORMS, PLATFORM_ORDER, refillText, tierBadge } from "./common.js";
+import { api, esc, initTheme, rememberRef, num, peso, PLATFORMS, PLATFORM_ORDER, refillText, tierBadge } from "./common.js";
 import { icons } from "./icons.js";
 
 document.getElementById("warn-icon").innerHTML = icons.warn(24);
 initTheme(icons);
+rememberRef();
 
 let services = [];   // hand-picked: the preview card
 let table = [];      // whole catalog, up to 65 per platform, followers first then cheapest (server-sorted)

@@ -283,6 +283,11 @@ async def list_orders(status: str | None = None, q: str | None = None,
 
 @router.post("/{order_id}/refill")
 async def request_refill(order_id: int, user: dict = Depends(current_user)):
+    return {"ok": True, "refill_id": await refill_order(order_id, user["id"])}
+
+
+async def refill_order(order_id: int, user_id: int) -> int:
+    """Ask the provider to refill a completed order. Returns our refill id (provider_refills.id)."""
     async with transaction() as db:
         row = await db.fetch_one("""
             select o.status, o.provider_id, o.provider_order_id, o.completed_at, s.refill_days,
@@ -291,7 +296,7 @@ async def request_refill(order_id: int, user: dict = Depends(current_user)):
               join services s on s.id = o.service_id
               join providers p on p.id = o.provider_id
              where o.id = :id and o.user_id = :u
-        """, {"id": order_id, "u": user["id"]})
+        """, {"id": order_id, "u": user_id})
         if not row:
             raise HTTPException(404, "Order not found")
         if row["refill_days"] == 0:
@@ -314,15 +319,23 @@ async def request_refill(order_id: int, user: dict = Depends(current_user)):
         raise HTTPException(400, f"Refill not accepted: {e}")
 
     async with transaction() as db:
-        await db.execute("""
+        rid = await db.fetch_val("""
             insert into provider_refills (order_id, provider_id, provider_refill_id)
-            values (:o, :p, :r) on conflict do nothing
+            values (:o, :p, :r) on conflict do nothing returning id
         """, {"o": order_id, "p": row["provider_id"], "r": refill_id})
-    return {"ok": True, "refill_id": refill_id}
+        if rid is None:   # a parallel request got there first
+            rid = await db.fetch_val(
+                "select id from provider_refills where order_id = :o and status = 'pending'", {"o": order_id})
+    return rid
 
 
 @router.post("/{order_id}/cancel")
 async def request_cancel(order_id: int, user: dict = Depends(current_user)):
+    await cancel_order(order_id, user["id"])
+    return {"ok": True}
+
+
+async def cancel_order(order_id: int, user_id: int) -> None:
     """Ask the provider to cancel a running order. Nothing is refunded here: when the provider
     reports it canceled (or partial), the status sync refunds the undelivered part."""
     async with transaction() as db:
@@ -335,7 +348,7 @@ async def request_cancel(order_id: int, user: dict = Depends(current_user)):
               left join provider_services ps
                 on ps.provider_id = o.provider_id and ps.provider_service_id = s.provider_service_id
              where o.id = :id and o.user_id = :u
-        """, {"id": order_id, "u": user["id"]})
+        """, {"id": order_id, "u": user_id})
     if not row:
         raise HTTPException(404, "Order not found")
     if row["status"] not in ("pending", "in_progress") or not row["provider_order_id"]:
@@ -361,4 +374,3 @@ async def request_cancel(order_id: int, user: dict = Depends(current_user)):
     async with transaction() as db:
         await db.execute("update orders set cancel_requested_at = now(), updated_at = now() where id = :id",
                          {"id": order_id})
-    return {"ok": True}

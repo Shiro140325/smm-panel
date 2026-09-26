@@ -56,9 +56,12 @@ async function refreshMe() {
   return me;
 }
 
+const ROUTES = ["new", "mass", "orders", "funds", "support", "affiliate", "api", "more"];
+const MORE = ["more", "support", "affiliate", "api"];   // on phones these sit behind the "More" tab
+
 function route() {
   const [name, qs] = location.hash.replace(/^#/, "").split("?");
-  return { name: ["new", "mass", "orders", "funds", "support"].includes(name) ? name : "new", params: new URLSearchParams(qs || "") };
+  return { name: ROUTES.includes(name) ? name : "new", params: new URLSearchParams(qs || "") };
 }
 
 let servicesReady = false, servicesLoad = Promise.resolve();
@@ -66,7 +69,7 @@ let servicesReady = false, servicesLoad = Promise.resolve();
 function render() {
   const { name, params } = route();
   document.querySelectorAll("[data-nav]").forEach((a) => {
-    if (a.dataset.nav === name) a.setAttribute("aria-current", "page");
+    if (a.dataset.nav === name || (a.dataset.nav === "more" && MORE.includes(name))) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   });
   clearTimeout(state.ordersTimer);
@@ -78,6 +81,9 @@ function render() {
   else if (name === "mass") renderMass();
   else if (name === "orders") renderOrders();
   else if (name === "support") renderSupport();
+  else if (name === "affiliate") renderAffiliate();
+  else if (name === "api") renderApi();
+  else if (name === "more") renderMore();
   else renderFunds(params);
   window.scrollTo(0, 0);
   // balance may have changed elsewhere (top-up credited, refunds): refresh it and re-check the form
@@ -90,6 +96,143 @@ function render() {
 }
 
 window.addEventListener("hashchange", render);
+
+/* ------------------------------------------------------------ more (phones) */
+
+function renderMore() {
+  const item = (href, icon, title, sub) => `
+    <a class="card more-item" href="${href}">
+      <span class="more-icon">${icons[icon](20)}</span>
+      <span class="grow"><span class="t">${title}</span><span class="s">${sub}</span></span>
+    </a>`;
+  view.innerHTML = `
+    <div class="page-head"><h1>More</h1></div>
+    <div class="more-list">
+      ${item("#affiliate", "gift", "Affiliate", "Earn credit when friends top up")}
+      ${item("#api", "code", "API", "Resell our services from your own panel")}
+      ${item("#support", "chat", "Support", "support@smmshiro.com")}
+    </div>`;
+}
+
+async function copy(text, done) {
+  try { await navigator.clipboard.writeText(text); toast(done); } catch { toast(text); }
+}
+
+/* ------------------------------------------------------------ affiliate */
+
+async function renderAffiliate() {
+  view.innerHTML = `<div class="page-head"><h1>Affiliate</h1></div><p class="muted">Loading…</p>`;
+  let a;
+  try { a = await api("/account/affiliate"); } catch (e) { view.querySelector("p").textContent = e.message; return; }
+  if (route().name !== "affiliate") return;
+  const rows = a.recent.map((r) => `<tr><td>${fmtDate(r.created_at)}</td><td>${esc(r.email)}</td>
+    <td class="num">${peso(r.topup_php)}</td><td class="num"><strong>+${peso(r.commission_php)}</strong></td></tr>`).join("");
+  view.innerHTML = `
+    <div class="page-head"><h1>Affiliate</h1></div>
+    <div class="two-col">
+      <div class="card panel primary support-card">
+        <span class="kicker">Your referral link</span>
+        <h2 class="aff-headline">Earn ${num(a.pct)}% of every top-up your friends make.</h2>
+        <p style="color:var(--ink-2)">Share your link. When someone creates an account with it, ${num(a.pct)}% of each top-up they complete is added to your balance, for as long as they use SMM Shiro.</p>
+        <div class="copy-row"><input class="input mono" id="ref-link" value="${esc(a.link)}" readonly aria-label="Referral link">
+          <button type="button" class="btn btn-primary" id="copy-link">Copy link</button></div>
+        <span class="hint">Code: <span class="mono">${esc(a.code)}</span></span>
+      </div>
+      <div class="aside">
+        <div class="card details">
+          <h3>Your stats</h3>
+          <div class="kv aff-kv">
+            <div><span class="k">Signed up</span><span class="v">${num(a.referred)}</span></div>
+            <div><span class="k">Topped up</span><span class="v">${num(a.paying)}</span></div>
+            <div><span class="k">Earned</span><span class="v">${peso(a.earned_php)}</span></div>
+          </div>
+        </div>
+        <div class="card details">
+          <h3>Rules</h3>
+          <p style="color:var(--ink-2);font-size:14px">Commission is balance credit for orders, not cash. Referring yourself or your own accounts isn't allowed. See the <a href="/terms/">Terms</a>.</p>
+        </div>
+      </div>
+    </div>
+    <div class="card table-card">
+      <div class="table-scroll"><table class="table">
+        <thead><tr><th>Date</th><th>Friend</th><th class="num">Top-up</th><th class="num">You earned</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="4" class="muted">No commissions yet. Share your link to start earning.</td></tr>`}</tbody>
+      </table></div>
+    </div>`;
+  document.getElementById("copy-link").addEventListener("click", () => copy(a.link, "Referral link copied"));
+  document.getElementById("ref-link").addEventListener("focus", (e) => e.target.select());
+}
+
+/* ------------------------------------------------------------ reseller API */
+
+async function renderApi() {
+  view.innerHTML = `<div class="page-head"><h1>API</h1></div><p class="muted">Loading…</p>`;
+  let k;
+  try { k = await api("/account/api-key"); } catch (e) { view.querySelector("p").textContent = e.message; return; }
+  if (route().name !== "api") return;
+  const ex = (params, out) => `<div class="api-ex"><div class="api-params">${params}</div><pre class="api-out">${esc(out)}</pre></div>`;
+  view.innerHTML = `
+    <div class="page-head"><h1>API</h1></div>
+    <div class="two-col">
+      <div class="card panel primary support-card">
+        <span class="kicker">Reseller API</span>
+        <p style="color:var(--ink-2)">Connect your own panel or scripts. Standard SMM panel API v2, so most panel software works as is. Prices and balance are in PHP.</p>
+        <div class="kv api-kv">
+          <div><span class="k">API URL</span><span class="v mono">${esc(k.url)}</span></div>
+          <div><span class="k">Method</span><span class="v mono">POST</span></div>
+          <div><span class="k">Format</span><span class="v">Form fields or JSON</span></div>
+          <div><span class="k">Limit</span><span class="v">120 requests / minute</span></div>
+        </div>
+        <div id="key-box"></div>
+      </div>
+      <div class="aside">
+        <div class="card details">
+          <h3>Keep your key secret</h3>
+          <p style="color:var(--ink-2);font-size:14px">Anyone with your key can place orders with your balance. We only store a fingerprint of it, so it's shown once. Lost it or leaked it? Generate a new one: the old key stops working right away.</p>
+        </div>
+      </div>
+    </div>
+    <div class="card panel api-docs">
+      <h3>Actions</h3>
+      <p class="hint">Every request sends <span class="mono">key</span> and <span class="mono">action</span>. Errors come back as <span class="mono">{"error": "..."}</span>.</p>
+      <h4>Services</h4>${ex("action=services", '[{"service": 1, "name": "TikTok Followers", "type": "Default", "category": "TikTok Followers", "rate": "52.20", "min": 10, "max": 100000, "refill": true, "cancel": false}]')}
+      <h4>Add order</h4>${ex("action=add · service · link · quantity<br><span class='muted'>Custom comments: comments (one per line) instead of quantity</span>", '{"order": 23501}')}
+      <h4>Order status</h4>${ex("action=status · order=23501<br><span class='muted'>or orders=1,10,100 (up to 100)</span>", '{"charge": "52.20", "start_count": "3572", "status": "Partial", "remains": "157", "currency": "PHP"}')}
+      <h4>Refill</h4>${ex("action=refill · order=23501<br><span class='muted'>or orders=1,2,3</span>", '{"refill": 1}')}
+      <h4>Refill status</h4>${ex("action=refill_status · refill=1<br><span class='muted'>or refills=1,2,3</span>", '{"status": "Completed"}')}
+      <h4>Cancel</h4>${ex("action=cancel · orders=1,2,3", '[{"order": 1, "cancel": 1}, {"order": 2, "cancel": {"error": "This service can\'t be canceled once placed"}}]')}
+      <h4>Balance</h4>${ex("action=balance", '{"balance": "1000.00", "currency": "PHP"}')}
+      <p class="hint">Statuses: Pending, In progress, Completed, Partial, Canceled. Undelivered parts are refunded to your balance automatically, same as on the site.</p>
+    </div>`;
+  paintKey(k.has_key, null);
+}
+
+function paintKey(hasKey, fresh) {
+  const box = document.getElementById("key-box");
+  if (!box) return;
+  box.innerHTML = fresh ? `
+      <div class="alert alert-info" role="status">Copy your key now. It won't be shown again.</div>
+      <div class="copy-row"><input class="input mono" id="api-key" value="${esc(fresh)}" readonly aria-label="API key">
+        <button type="button" class="btn btn-primary" id="copy-key">Copy key</button></div>`
+    : `<p class="hint">${hasKey ? "You have an active API key." : "You don't have an API key yet."}</p>`;
+  box.insertAdjacentHTML("beforeend", `<div class="support-actions" style="margin-top:12px">
+      <button type="button" class="btn ${fresh ? "btn-secondary" : "btn-primary"}" id="gen-key">${hasKey ? "Generate new key" : "Generate API key"}</button>
+      ${hasKey ? `<button type="button" class="btn btn-ghost" id="revoke-key">Revoke</button>` : ""}</div>`);
+  if (fresh) {
+    document.getElementById("copy-key").addEventListener("click", () => copy(fresh, "API key copied"));
+    document.getElementById("api-key").addEventListener("focus", (e) => e.target.select());
+  }
+  document.getElementById("gen-key").addEventListener("click", async () => {
+    if (hasKey && !confirm("Generate a new key? Your current key will stop working.")) return;
+    try { paintKey(true, (await api("/account/api-key", { method: "POST" })).key); }
+    catch (e) { toast(e.message, { bad: true }); }
+  });
+  document.getElementById("revoke-key")?.addEventListener("click", async () => {
+    if (!confirm("Revoke your API key? Scripts using it will stop working.")) return;
+    try { await api("/account/api-key", { method: "DELETE" }); paintKey(false, null); toast("API key revoked"); }
+    catch (e) { toast(e.message, { bad: true }); }
+  });
+}
 
 /* ------------------------------------------------------------ support */
 

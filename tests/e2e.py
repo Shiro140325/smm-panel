@@ -197,7 +197,8 @@ async def main():
     check("refill requested", r.status_code == 200, r.text)
     ids = [o["id"] for o in (await c.get("/orders", params={"status": "refilling"})).json()]
     check("Refilling tab shows the order while its refill runs", ids == [o_hq["id"]], ids)
-    rid = str(r.json().get("refill_id"))
+    rid = str((await sql("select provider_refill_id from provider_refills where id = :i",
+                         {"i": r.json().get("refill_id")}))[0]["provider_refill_id"])
     r = await c.post(f"/orders/{o_hq['id']}/refill")
     check("second refill while pending 409", r.status_code == 409, r.text)
     st = (await c.get("/orders")).json()
@@ -427,6 +428,74 @@ async def main():
     r = await ca.post("/admin/api/login", json={"password": os.environ["ADMIN_PASS"]})
     check("admin: locked for 15 min after 5 wrong passwords", r.status_code == 429, r.text)
     await ca.aclose()
+
+    # --- referral program
+    aff = (await c.get("/account/affiliate")).json()
+    check("affiliate: code and link", aff["code"] and aff["link"].endswith("/?ref=" + aff["code"]) and aff["pct"] == 5, aff)
+    check("affiliate: same code next time", (await c.get("/account/affiliate")).json()["code"] == aff["code"])
+    c3 = httpx.AsyncClient(base_url=API)
+    r = await c3.post("/auth/register", json={"email": "friend@example.com", "password": "password123", "ref": aff["code"].upper()})
+    fid = r.json()["id"]
+    c4 = httpx.AsyncClient(base_url=API)
+    await c4.post("/auth/register", json={"email": "stranger@example.com", "password": "password123", "ref": "nosuchcode"})
+    refs = {x["email"]: x["referred_by"] for x in await sql("select email, referred_by from users where email in ('friend@example.com', 'stranger@example.com')")}
+    check("referral: signup link records the referrer; unknown code ignored",
+          refs == {"friend@example.com": me["id"], "stranger@example.com": None}, refs)
+    bal0 = (await c.get("/auth/me")).json()["balance_php"]
+    ftid = str(uuid.uuid4())
+    await sql("insert into topups (id, user_id, amount_php, method) values (CAST(:id AS uuid), :u, 1000, 'paymongo')", {"id": ftid, "u": fid})
+    raw, hdr = signed(paid_event(ftid, 1000))
+    await c.post("/webhooks/paymongo", content=raw, headers=hdr)
+    await c.post("/webhooks/paymongo", content=raw, headers=hdr)   # replayed webhook
+    bal1 = (await c.get("/auth/me")).json()["balance_php"]
+    check("referral: 5% of the friend's top-up credited once", round(bal1 - bal0, 2) == 50, (bal0, bal1))
+    check("referral: friend gets their full top-up", (await c3.get("/auth/me")).json()["balance_php"] == 1000)
+    aff = (await c.get("/account/affiliate")).json()
+    check("affiliate: stats", aff["referred"] == 1 and aff["paying"] == 1 and aff["earned_php"] == 50
+          and aff["recent"][0]["email"] == "f***@example.com" and float(aff["recent"][0]["topup_php"]) == 1000, aff)
+    await c4.aclose()
+
+    # --- reseller API
+    v2 = lambda **kw: c3.post("/api/v2", data=kw)
+    check("api: no key yet", (await c3.get("/account/api-key")).json()["has_key"] is False)
+    key = (await c3.post("/account/api-key")).json()["key"]
+    check("api: key shown once, only its hash stored", len(key) == 32 and (await c3.get("/account/api-key")).json()["has_key"]
+          and key not in str(await sql("select api_key_hash from users where id = :u", {"u": fid})))
+    r = await v2(key="wrong", action="balance")
+    check("api: wrong key", r.json() == {"error": "Invalid API key"}, r.text)
+    r = await v2(key=key, action="balance")
+    check("api: balance in PHP", r.json() == {"balance": "1000.00", "currency": "PHP"}, r.text)
+    svcs = (await v2(key=key, action="services")).json()
+    s1 = next(x for x in svcs if x["service"] == 1)
+    check("api: services list", {"service", "name", "type", "category", "rate", "min", "max", "refill", "cancel"} <= set(s1)
+          and s1["rate"] == "52.20" and s1["category"].startswith("TikTok"), s1)
+    r = await v2(key=key, action="add", service=1, link="https://www.tiktok.com/@api", quantity=1000)
+    oid = r.json().get("order")
+    check("api: add order", isinstance(oid, int), r.text)
+    check("api: charged like the site", (await v2(key=key, action="balance")).json()["balance"] == "947.80")
+    r = await v2(key=key, action="add", service=1, link="tiktok.com/@api", quantity=1000)
+    check("api: bad link", "error" in r.json(), r.text)
+    r = await v2(key=key, action="add", service=1, link="https://www.tiktok.com/@api", quantity=100000000)
+    check("api: quantity out of range", "Quantity must be between" in r.json().get("error", ""), r.text)
+    r = await v2(key=key, action="status", order=oid)
+    check("api: status", r.json() == {"charge": "52.20", "start_count": "0", "status": "Pending", "remains": "0", "currency": "PHP"}, r.text)
+    r = await v2(key=key, action="status", orders=f"{oid},999999")
+    check("api: multi status", r.json()[str(oid)]["status"] == "Pending" and r.json()["999999"] == {"error": "Incorrect order ID"}, r.text)
+    r = await v2(key=key, action="status", order=o_hq["id"])   # juan's order
+    check("api: can't see other customers' orders", r.json() == {"error": "Incorrect order ID"}, r.text)
+    r = await v2(key=key, action="refill", order=oid)
+    check("api: refill refused with the site's reason", r.json() == {"error": "This service has no refill"}, r.text)
+    r = await v2(key=key, action="cancel", orders=str(oid))
+    check("api: cancel answers per order", isinstance(r.json(), list) and r.json()[0]["order"] == oid, r.text)
+    r = await v2(key=key, action="refill_status", refill=424242)
+    check("api: refill_status unknown", r.json() == {"error": "Refill not found"}, r.text)
+    r = await c3.post("/api/v2", json={"key": key, "action": "balance"})
+    check("api: JSON body works too", r.json().get("currency") == "PHP", r.text)
+    r = await v2(key=key, action="nope")
+    check("api: unknown action", r.json() == {"error": "Incorrect action"}, r.text)
+    await c3.post("/account/api-key")   # regenerate: the old key stops working
+    check("api: regenerating revokes the old key", (await v2(key=key, action="balance")).json() == {"error": "Invalid API key"})
+    await c3.aclose()
 
     # --- ledger integrity
     led = await sql("select reason, sum(delta) s, count(*) n from ledger where user_id = :u group by reason order by reason",

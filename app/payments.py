@@ -53,6 +53,17 @@ async def credit_topup(topup_id: str, paid_php: int, source: str | None) -> bool
             on conflict do nothing
             returning user_id
         """, {"id": topup_id, "amt": paid_php, "src": str(source)[:20] if source else None})
+        pct = get_settings().referral_pct
+        if row and pct > 0:
+            # referral commission: credit to whoever referred this customer, once per top-up
+            await db.execute("""
+                insert into ledger (user_id, delta, reason, ref)
+                select u.referred_by, round(CAST(:amt AS numeric) * CAST(:pct AS numeric) / 100, 2), 'referral', :id
+                  from users u
+                 where u.id = :u and u.referred_by is not null and u.referred_by <> u.id
+                   and round(CAST(:amt AS numeric) * CAST(:pct AS numeric) / 100, 2) > 0
+                on conflict do nothing
+            """, {"u": row["user_id"], "amt": paid_php, "pct": pct, "id": topup_id})
     if row:
         log.info("topup %s credited ₱%s (%s)", topup_id, paid_php, source)
     return bool(row)

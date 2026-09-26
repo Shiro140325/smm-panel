@@ -7,5 +7,7 @@ Disallow: /topups
 Disallow: /webhooks/
 Disallow: /fx
 Disallow: /admin/
+Disallow: /account/
+Disallow: /api/
 
 Sitemap: https://smmshiro.com/sitemap.xml
