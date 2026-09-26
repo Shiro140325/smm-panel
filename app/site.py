@@ -96,8 +96,6 @@ def page(*, path: str, title: str, description: str, body: str, jsonld: list | N
 
 
 def not_found_page() -> str:
-    from app.seo_pages import PAGES
-    links = "".join(f'<a class="pill" href="/{slug}/">{e(p["h1_short"])}</a>' for slug, p in PAGES.items())
     body = f"""<section class="block nf">
   <div class="wrap nf-wrap">
     <span class="nf-code" aria-hidden="true">404</span>
@@ -106,10 +104,6 @@ def not_found_page() -> str:
     <div class="hero-cta nf-cta">
       <a class="btn btn-primary btn-lg" href="/">Go to home page</a>
       <a class="btn btn-secondary btn-lg" href="/dashboard/">Open dashboard</a>
-    </div>
-    <div class="nf-more">
-      <span class="kicker">Popular services</span>
-      <div class="price-tabs">{links}</div>
     </div>
   </div>
 </section>"""

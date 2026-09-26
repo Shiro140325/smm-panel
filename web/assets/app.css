@@ -721,5 +721,4 @@ section.block .prose h2 { font-size: 22px; margin-top: 18px; }
 .nf h1 { font-size: clamp(30px, 4vw, 44px); }
 .nf .lead { font-size: 18px; color: var(--ink-2); max-width: 560px; }
 .nf-cta { margin-top: 8px; }
-.nf-more { margin-top: 28px; display: flex; flex-direction: column; gap: 12px; }
 a.pill { text-decoration: none; }
