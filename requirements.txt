@@ -8,3 +8,4 @@ email-validator==2.3.0
 httpx==0.28.1
 argon2-cffi==25.1.0
 PyJWT==2.12.1
+python-multipart==0.0.26   # form-encoded requests to the reseller API
