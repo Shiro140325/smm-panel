@@ -17,6 +17,7 @@ from app import fx
 from app.config import get_settings
 from app.db import DB, get_db
 from app.providers.smm_client import SMMClient
+from app.ratelimit import client_ip
 from app.routers import services as services_router
 from app.routers.orders import _fail_and_refund, order_filter
 
@@ -33,10 +34,7 @@ def _admin_pass() -> str:
     return os.environ.get("ADMIN_PASS", "")
 
 
-def _ip(request: Request) -> str:
-    # behind Cloudflare/Render the client address arrives in a header
-    return (request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for", "").split(",")[0]
-            or (request.client.host if request.client else "?")).strip()
+_ip = client_ip
 
 
 def require_admin(request: Request) -> None:

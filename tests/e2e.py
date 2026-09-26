@@ -93,6 +93,27 @@ async def main():
     check("bad login 401", r.status_code == 401)
     r = await c2.get("/auth/me")
     check("me without cookie 401", r.status_code == 401)
+
+    # --- login and sign-up rate limits (client IP comes from Cloudflare's header)
+    ip = lambda a: {"cf-connecting-ip": a}
+    for _ in range(3):   # + the bad login above = 4 misses
+        await c2.post("/auth/login", json={"email": "juan@example.com", "password": "wrongpass1"}, headers=ip("10.0.0.1"))
+    r = await c2.post("/auth/login", json={"email": "juan@example.com", "password": "password123"}, headers=ip("10.0.0.2"))
+    check("login: right password still works after 4 misses (and clears them)", r.status_code == 200, r.text)
+    for _ in range(5):
+        await c2.post("/auth/login", json={"email": "juan@example.com", "password": "wrongpass1"}, headers=ip("10.0.0.1"))
+    r = await c2.post("/auth/login", json={"email": "juan@example.com", "password": "password123"}, headers=ip("10.0.0.3"))
+    check("login: account locked after 5 wrong passwords, from any IP", r.status_code == 429 and "15 minutes" in r.text, r.text)
+    for i in range(20):
+        await c2.post("/auth/login", json={"email": f"nobody{i}@example.com", "password": "wrongpass1"}, headers=ip("10.0.0.4"))
+    r = await c2.post("/auth/login", json={"email": "other-ip@example.com", "password": "password123"}, headers=ip("10.0.0.4"))
+    check("login: IP blocked after 20 wrong passwords", r.status_code == 429, r.text)
+    c2.cookies.clear()
+    n = int(os.environ.get("SIGNUPS_PER_IP_HOUR", "5"))
+    codes = [(await c2.post("/auth/register", json={"email": f"su{i}@example.com", "password": "password123"},
+                            headers=ip("10.0.0.5"))).status_code for i in range(n + 1)]
+    check("sign-up: limited per IP per hour", codes[:n] == [200] * n and codes[n] == 429, codes)
+    c2.cookies.clear()
     r = await c.get("/auth/me")
     me = r.json()
     check("me balance 0", r.status_code == 200 and me["balance_php"] == 0, r.text)
