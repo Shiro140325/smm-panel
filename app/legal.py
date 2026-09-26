@@ -44,6 +44,7 @@ def terms() -> str:
 <ul>
   <li>Orders are paid from your wallet balance, in Philippine pesos. You add balance by topping up with QR Ph through PayMongo's checkout. Top-ups are from ₱{s.topup_min_php:,} to ₱{s.topup_max_php:,}.</li>
   <li>A top-up checkout stays open for {TOPUP_TTL_MINUTES} minutes. You can cancel it before you pay. If a payment still goes through after a checkout has expired or been canceled, we credit it to your balance.</li>
+  <li>Free credit we give, such as a welcome credit for new accounts, can only be used for orders. It can't be refunded or withdrawn, and it's one per person: accounts made to collect it again may be closed.</li>
   <li>Your balance is credit for use on this site. It is not a deposit or e-money account, earns no interest and cannot be transferred to another account. See the <a href="/refund-policy/">Refund and refill policy</a> for when it can be refunded.</li>
 </ul>
 

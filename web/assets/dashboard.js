@@ -2,6 +2,7 @@ import {
   api, esc, fmtDate, initTheme, num, orderCharge, peso, PLATFORMS, PLATFORM_ORDER, refillText, enhanceSelect, tierBadge, toast,
 } from "./common.js";
 import { icons } from "./icons.js";
+import { startTour } from "./tour.js";
 
 initTheme(icons);
 
@@ -1042,6 +1043,77 @@ function renderFunds(params) {
   else loadTopups();
 }
 
+/* ----------------------------------------------------------- welcome guide */
+
+// The cheapest way to try the site with the welcome credit: TikTok views (then likes), 1,000 or
+// as many as the credit covers, never below the service minimum.
+function pickTrial(credit) {
+  for (const cat of ["Views", "Likes", null]) {
+    let best = null;
+    for (const s of state.services) {
+      if (s.custom_comments || (cat && (s.platform !== "tiktok" || s.category !== cat))) continue;
+      const qty = Math.min(1000, s.max, Math.floor((credit / s.price_per_1k_php) * 1000 / 10) * 10);
+      if (qty < s.min || orderCharge(s.price_per_1k_php, qty) > credit) continue;
+      if (!best || s.price_per_1k_php < best.s.price_per_1k_php) best = { s, qty };
+    }
+    if (best) return best;
+  }
+  return null;
+}
+
+function applyTrial(trial) {
+  if (!trial) return;
+  Object.assign(state, { platform: trial.s.platform, category: trial.s.category || "Other", serviceId: trial.s.id,
+                         search: "", quantity: String(trial.qty) });
+  if (location.hash !== "#new") location.hash = "#new";
+  else renderNew();
+}
+
+async function runWelcomeGuide({ credit, preview }) {
+  await servicesLoad;
+  const trial = pickTrial(credit || 15);
+  const creditText = credit ? peso(credit) : "";
+  const onPage = (hash) => () => new Promise((r) => {
+    if (location.hash === hash) return r();
+    location.hash = hash;
+    setTimeout(r, 150);
+  });
+  const nav = (name) => [`.side-nav [data-nav="${name}"]`, `.tabbar [data-nav="${name}"]`];
+  const steps = [
+    { target: null, title: "Welcome to SMM Shiro!",
+      text: credit
+        ? `We added <strong>${creditText} free credit</strong> to your balance, so you can try a real order before paying anything. This quick guide shows you how. It takes 30 seconds.`
+        : "This quick guide shows you how to place your first order. It takes 30 seconds.",
+      next: "Show me", enter: onPage("#new") },
+    { target: [".balance-card", ".topbar .bal"], title: "Your balance",
+      text: credit ? `Your ${creditText} is already here. Orders are paid from this balance, and refunds come back to it.`
+        : "Orders are paid from this balance, and refunds come back to it." },
+    { target: ["#order-form .pill-row"], title: "Pick a platform",
+      text: trial ? `We picked <strong>${esc(PLATFORMS[trial.s.platform] || trial.s.platform)} ${esc(trial.s.category || "")}</strong> for your free try. You can switch to any platform later.`
+        : "Choose the platform you want to grow.",
+      enter: () => applyTrial(trial) },
+    { target: ["#svc-list .svc-option[aria-pressed=\"true\"]", "#svc-list"], title: "Know what you're buying",
+      text: "Every service shows its quality label, price per 1,000, start time, drop risk and refill terms before you pay." },
+    { target: ["#link"], title: "Paste your link",
+      text: "Use the public link to your post, video or profile. We never need your password." },
+    { target: [".charge-box"], title: "Check the charge",
+      text: trial ? `${num(trial.qty)} ${esc((trial.s.category || "").toLowerCase())} cost <strong>${peso(orderCharge(trial.s.price_per_1k_php, trial.qty))}</strong>${credit ? ", covered by your free credit" : ""}. Tick the box, then Place order.`
+        : "The charge updates as you type. Tick the box, then Place order." },
+    { target: nav("orders"), title: "Track delivery",
+      text: "Follow progress in Orders. If something isn't fully delivered, the undelivered part is refunded to your balance automatically." },
+    { target: nav("funds"), title: "Ready for more?",
+      text: "Add funds by QR Ph with GCash, Maya or your bank app, from ₱100. Your balance updates within a minute.",
+      next: credit ? "Try my free order" : "Start ordering" },
+  ];
+  startTour(steps, {
+    note: preview ? "Preview: this is what new customers see. Nothing is added to your balance." : "",
+    onClose: () => {
+      try { localStorage.removeItem("tour"); } catch { /* private mode */ }
+      if (route().name === "new") document.getElementById("link")?.scrollIntoView({ block: "center" });
+    },
+  });
+}
+
 /* ----------------------------------------------------------------- boot */
 
 (async () => {
@@ -1059,4 +1131,11 @@ function renderFunds(params) {
     return;
   }
   render();   // Orders and Add funds draw now; New order and Mass order draw when the list arrives
+
+  // welcome guide: right after sign-up (the login page leaves a note), or ?tour=preview to see it
+  let pending = null;
+  try { pending = localStorage.getItem("tour"); } catch { /* private mode */ }
+  const preview = new URLSearchParams(location.search).get("tour") === "preview";
+  if (preview) runWelcomeGuide({ credit: 15, preview: true });
+  else if (pending) runWelcomeGuide({ credit: Number(pending) || 0, preview: false });
 })();

@@ -21,7 +21,7 @@ create table if not exists ledger (
   id         bigserial primary key,
   user_id    bigint not null references users(id),
   delta      numeric(12,2) not null,
-  reason     text not null,            -- topup | order | refund | adjustment | referral
+  reason     text not null,            -- topup | order | refund | adjustment | referral | welcome
   ref        text,                     -- topup id / order id (referral: the referred customer's topup id)
   created_at timestamptz not null default now()
 );

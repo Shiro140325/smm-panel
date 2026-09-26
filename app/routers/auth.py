@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.exc import IntegrityError
 
+from app.config import get_settings
 from app.db import DB, get_db
 from app.ratelimit import Limiter, client_ip
 from app.security import (balance_of, clear_session, current_user, hash_password, issue_session,
@@ -54,8 +55,12 @@ async def register(body: RegisterIn, request: Request, response: Response, db: D
         )
     except IntegrityError:
         raise HTTPException(409, "Email already registered")
+    welcome = get_settings().welcome_credit_php
+    if welcome > 0:
+        await db.execute("insert into ledger (user_id, delta, reason, ref) values (:u, :d, 'welcome', :r)",
+                         {"u": user["id"], "d": welcome, "r": str(user["id"])})
     issue_session(response, user["id"])
-    return {"id": user["id"], "email": user["email"]}
+    return {"id": user["id"], "email": user["email"], "welcome_php": welcome}
 
 
 @router.post("/login")

@@ -86,6 +86,7 @@ async def main():
     # --- auth
     r = await c.post("/auth/register", json={"email": "Juan@Example.com", "password": "password123"})
     check("register", r.status_code == 200, r.text)
+    check("no welcome credit unless WELCOME_CREDIT_PHP is set", r.json().get("welcome_php") == float(os.environ.get("WELCOME_CREDIT_PHP", "0")), r.text)
     r = await c.post("/auth/register", json={"email": "juan@example.com", "password": "password123"})
     check("duplicate email 409", r.status_code == 409, r.text)
     c2 = httpx.AsyncClient(base_url=API)

@@ -81,7 +81,9 @@
     if (mode === "register" && password.length < 8) { err.textContent = "Password must be at least 8 characters."; err.classList.remove("hidden"); return; }
     $("submit").disabled = true;
     try {
-      await api(mode === "login" ? "/auth/login" : "/auth/register", { method: "POST", body: mode === "register" && ref ? { email, password, ref } : { email, password } });
+      const res = await api(mode === "login" ? "/auth/login" : "/auth/register", { method: "POST", body: mode === "register" && ref ? { email, password, ref } : { email, password } });
+      // new account with a welcome credit: the dashboard opens with the guide
+      if (mode === "register" && res.welcome_php > 0) { try { localStorage.setItem("tour", String(res.welcome_php)); } catch { /* private mode */ } }
       location.replace("/dashboard/");
     } catch (ex) {
       err.textContent = ex.message;
