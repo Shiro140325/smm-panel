@@ -3,7 +3,6 @@ import hashlib
 import logging
 import os
 import re
-import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -16,7 +15,8 @@ from starlette.datastructures import Headers
 
 from app import fx
 from app.config import get_settings
-from app.routers import admin, auth, orders, services, topups, webhooks
+from app.site import ASSET_VERSION
+from app.routers import admin, auth, orders, pages, services, topups, webhooks
 from app.workers.sync import run_sync_once
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -52,7 +52,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for r in (auth.router, services.router, orders.router, topups.router, webhooks.router, admin.router):
+for r in (auth.router, services.router, orders.router, topups.router, webhooks.router, admin.router, pages.router):
     app.include_router(r)
 
 
@@ -73,7 +73,6 @@ WEB_DIR = Path(__file__).resolve().parents[1] / "web"
 
 # Every deploy gets a new asset version, stamped onto script/stylesheet URLs in HTML and JS
 # ("/assets/app.css" → "/assets/app.css?v=<commit>"), so no browser or CDN cache can serve an old file.
-ASSET_VERSION = (os.environ.get("RENDER_GIT_COMMIT") or str(int(time.time())))[:10]
 _ASSET_URL = re.compile(r"""((?:/assets/|\./)[\w.-]+\.(?:js|css))(["'])""")
 
 

@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     topup_min_php: int = 100
     topup_max_php: int = 50000
 
+    referral_pct: float = 5.0        # affiliate commission: % of each top-up a referred customer completes
+
     sync_interval_seconds: int = 180
     sync_enabled: bool = True
     refill_ignore_after_days: int = 5
