@@ -124,6 +124,7 @@ alter table orders add column if not exists comments text;   -- for databases cr
 alter table orders add column if not exists cancel_requested_at timestamptz;
 create index if not exists orders_user on orders (user_id, created_at desc);
 create index if not exists orders_sync on orders (provider_id, status);
+create index if not exists orders_completed_by_service on orders (service_id, completed_at desc) where status = 'completed';   -- service timing
 
 create table if not exists provider_refills (
   id                 bigserial primary key,

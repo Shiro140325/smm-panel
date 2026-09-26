@@ -325,6 +325,18 @@ function renderSupport() {
 
 /* ------------------------------------------------------------ new order */
 
+// Completion times from this service's latest completed orders on the site (GET /services/timing)
+const TIMING_ORDERS = 15;
+function timingRows(id) {
+  const t = state.timing?.[id];
+  const avg = t?.avg_seconds != null ? took(t.avg_seconds)
+    : `<span class="muted" style="font-weight:500">Not enough data yet${t ? ` (${t.n} of ${TIMING_ORDERS})` : ""}</span>`;
+  const last = t?.last_seconds != null ? `${took(t.last_seconds)} <span class="muted" style="font-weight:500">· ${ago(t.last_completed_at)}</span>`
+    : `<span class="muted" style="font-weight:500">No orders yet</span>`;
+  return `<div><span class="k" title="Average time from order to completion, over the last ${TIMING_ORDERS} completed orders">Average time</span><span class="v">${avg}</span></div>
+            <div><span class="k" title="How long the most recent completed order took">Last completion</span><span class="v">${last}</span></div>`;
+}
+
 const selectedService = () => state.services.find((s) => s.id === state.serviceId) || null;
 
 const LIST_LIMIT = 80;              // rows rendered at once; search narrows the rest
@@ -529,6 +541,7 @@ function renderNew() {
             <div><span class="k">Refill</span><span class="v">${refillText(svc.refill_days)}</span></div>
             ${svc.non_drop ? `<div><span class="k">Non-drop</span><span class="v">${svc.non_drop_days ? `${days(svc.non_drop_days)} guaranteed` : "No time limit stated"}</span></div>` : ""}
             ${svc.drop_risk ? `<div><span class="k">Drop risk</span><span class="v">${esc(svc.drop_risk)}</span></div>` : ""}
+            ${timingRows(svc.id)}
           </div>
         </div>` : ""}
         <div class="card details">
@@ -1167,7 +1180,9 @@ async function runWelcomeGuide({ credit, preview }) {
 
 (async () => {
   // start the service list right away, alongside the account check (it's the slow one)
-  servicesLoad = api("/services").catch(() => []).then((list) => {
+  // completion times: best effort, the form works without them
+  const timingLoad = api("/services/timing").then((t) => { state.timing = t; }).catch(() => {});
+  servicesLoad = Promise.all([api("/services").catch(() => []), timingLoad]).then(([list]) => {
     state.services = list;
     indexServices();
     servicesReady = true;

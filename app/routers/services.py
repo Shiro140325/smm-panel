@@ -149,6 +149,36 @@ async def _cached(request: Request, key: tuple, db: DB) -> Response:
     return Response(body, media_type="application/json", headers=headers)
 
 
+TIMING_ORDERS = 15      # average over exactly this many of a service's latest completed orders
+TIMING_TTL = 300
+
+
+@router.get("/timing")
+async def service_timing(db: DB = Depends(get_db)):
+    """Per service, from its latest completed orders (all customers): how many we have (up to 15),
+    their average completion time once there are 15, and how long the most recent one took.
+    Completion time = order placed → provider reported it completed."""
+    hit = _cache.get(("timing",))
+    if hit and time.monotonic() - hit[0] < TIMING_TTL:
+        return hit[1]
+    rows = await db.fetch_all(f"""
+        with r as (
+          select service_id, completed_at, extract(epoch from (completed_at - created_at)) as sec,
+                 row_number() over (partition by service_id order by completed_at desc) as rn
+            from orders
+           where status = 'completed' and completed_at is not null and completed_at >= created_at
+        )
+        select service_id, count(*) as n, avg(sec)::int as avg_sec,
+               max(case when rn = 1 then sec end)::int as last_sec, max(completed_at) as last_at
+          from r where rn <= {TIMING_ORDERS}
+         group by service_id
+    """)
+    out = {str(r["service_id"]): {"n": r["n"], "avg_seconds": r["avg_sec"] if r["n"] >= TIMING_ORDERS else None,
+                                  "last_seconds": r["last_sec"], "last_completed_at": r["last_at"]} for r in rows}
+    _cache[("timing",)] = (time.monotonic(), out)
+    return out
+
+
 @router.get("/count")
 async def count_services(db: DB = Depends(get_db)):
     """How many services customers can order (the landing page links to the full list with this)."""

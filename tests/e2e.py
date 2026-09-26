@@ -439,6 +439,19 @@ async def main():
     check("recently completed: login required", (await httpx.AsyncClient(base_url=API).get("/orders/recently-completed")).status_code == 401)
     await cx.aclose()
 
+    # --- service timing: average over exactly the last 15 completed orders, plus the latest one
+    await sql("""insert into orders (user_id, service_id, provider_id, link, quantity, price_php, status, created_at, completed_at)
+                 select :u, 3, 1, 'https://t/' || g, 10, 1, 'completed',
+                        now() - make_interval(mins => g * 10) - make_interval(secs => g * 60), now() - make_interval(mins => g * 10)
+                   from generate_series(1, 16) g""", {"u": me["id"]})   # order g took g minutes; g = 16 is the oldest
+    timing = (await c.get("/services/timing")).json()
+    t3 = timing.get("3", {})
+    check("timing: average of the newest 15 only (1..15 min → 8 min), last = newest (1 min)",
+          t3.get("n") == 15 and t3.get("avg_seconds") == 480 and t3.get("last_seconds") == 60, t3)
+    t_hq = timing.get("2", {})   # the HQ order (service 2) completed earlier in this test
+    check("timing: under 15 orders, no average yet but a last completion", t_hq.get("n", 0) >= 1
+          and t_hq.get("avg_seconds") is None and t_hq.get("last_seconds") is not None, (timing, o_hq))
+
     # --- referral program
     aff = (await c.get("/account/affiliate")).json()
     check("affiliate: code and link", aff["code"] and aff["link"].endswith("/?ref=" + aff["code"]) and aff["pct"] == 5, aff)
