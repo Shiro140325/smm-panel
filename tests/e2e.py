@@ -430,6 +430,15 @@ async def main():
     check("admin: locked for 15 min after 5 wrong passwords", r.status_code == 429, r.text)
     await ca.aclose()
 
+    # --- recently completed (all customers, anonymous)
+    cx = httpx.AsyncClient(base_url=API)
+    await cx.post("/auth/register", json={"email": "viewer@example.com", "password": "password123"})
+    feed = (await cx.get("/orders/recently-completed")).json()
+    check("recently completed: other customers' orders, no links or owners",
+          any(f["quantity"] == o_hq["quantity"] for f in feed) and all(set(f) == {"platform", "category", "service_name", "tier", "quantity", "completed_at", "took_seconds"} for f in feed), feed[:2])
+    check("recently completed: login required", (await httpx.AsyncClient(base_url=API).get("/orders/recently-completed")).status_code == 401)
+    await cx.aclose()
+
     # --- referral program
     aff = (await c.get("/account/affiliate")).json()
     check("affiliate: code and link", aff["code"] and aff["link"].endswith("/?ref=" + aff["code"]) and aff["pct"] == 5, aff)

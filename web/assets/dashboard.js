@@ -57,8 +57,8 @@ async function refreshMe() {
   return me;
 }
 
-const ROUTES = ["new", "mass", "orders", "funds", "support", "affiliate", "api", "more"];
-const MORE = ["more", "support", "affiliate", "api"];   // on phones these sit behind the "More" tab
+const ROUTES = ["new", "mass", "orders", "funds", "recent", "support", "affiliate", "api", "more"];
+const MORE = ["more", "recent", "support", "affiliate", "api"];   // on phones these sit behind the "More" tab
 
 function route() {
   const [name, qs] = location.hash.replace(/^#/, "").split("?");
@@ -82,6 +82,7 @@ function render() {
   else if (name === "mass") renderMass();
   else if (name === "orders") renderOrders();
   else if (name === "support") renderSupport();
+  else if (name === "recent") renderRecent();
   else if (name === "affiliate") renderAffiliate();
   else if (name === "api") renderApi();
   else if (name === "more") renderMore();
@@ -109,6 +110,7 @@ function renderMore() {
   view.innerHTML = `
     <div class="page-head"><h1>More</h1></div>
     <div class="more-list">
+      ${item("#recent", "done", "Recently completed", "Orders just delivered for other customers")}
       ${item("#affiliate", "gift", "Affiliate", "Earn credit when friends top up")}
       ${item("#api", "code", "API", "Resell our services from your own panel")}
       ${item("#support", "chat", "Support", "support@smmshiro.com")}
@@ -117,6 +119,51 @@ function renderMore() {
 
 async function copy(text, done) {
   try { await navigator.clipboard.writeText(text); toast(done); } catch { toast(text); }
+}
+
+/* ------------------------------------------------------------ recently completed */
+
+function took(sec) {
+  if (sec == null || sec < 0) return "–";
+  const m = Math.round(sec / 60);
+  if (m < 60) return `${Math.max(m, 1)} min`;
+  const h = Math.floor(m / 60), d = Math.floor(h / 24);
+  return d >= 1 ? `${d}d ${h % 24}h` : `${h}h ${m % 60}m`;
+}
+
+function ago(iso) {
+  const s = (Date.now() - new Date(iso)) / 1000;
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return fmtDate(iso);
+}
+
+async function renderRecent() {
+  view.innerHTML = `
+    <div class="page-head"><h1>Recently completed</h1></div>
+    <p class="muted" style="margin-top:-6px">Orders just delivered for SMM Shiro customers. Links and accounts stay private.</p>
+    <div class="card table-card"><div class="table-scroll">
+      <table class="table recent-table" aria-label="Recently completed orders">
+        <thead><tr><th>Service</th><th class="num">Quantity</th><th class="num">Delivered in</th><th class="num">Completed</th></tr></thead>
+        <tbody id="recent-body"><tr><td colspan="4" class="empty">Loading…</td></tr></tbody>
+      </table>
+    </div></div>`;
+  let rows;
+  try { rows = await api("/orders/recently-completed"); } catch (e) {
+    document.getElementById("recent-body").innerHTML = `<tr><td colspan="4" class="empty">${esc(e.message)}</td></tr>`;
+    return;
+  }
+  const body = document.getElementById("recent-body");
+  if (!body) return;
+  body.innerHTML = rows.length ? rows.map((r) => `<tr>
+      <td data-col="svc"><div class="svc">${esc(r.service_name)} ${tierBadge(r.tier)}</div>
+        <div class="muted" style="font-size:13px">${esc(PLATFORMS[r.platform] || r.platform)}${r.category ? ` · ${esc(r.category)}` : ""}</div></td>
+      <td data-col="qty" class="num">${num(r.quantity)}</td>
+      <td data-col="took" class="num">${took(r.took_seconds)}</td>
+      <td data-col="when" class="num muted">${ago(r.completed_at)}</td>
+    </tr>`).join("")
+    : `<tr><td colspan="4" class="empty">No completed orders yet.</td></tr>`;
 }
 
 /* ------------------------------------------------------------ affiliate */
@@ -1099,6 +1146,8 @@ async function runWelcomeGuide({ credit, preview }) {
     { target: [".charge-box"], title: "Check the charge",
       text: trial ? `${num(trial.qty)} ${esc((trial.s.category || "").toLowerCase())} cost <strong>${peso(orderCharge(trial.s.price_per_1k_php, trial.qty))}</strong>${credit ? ", covered by your free credit" : ""}. Tick the box, then Place order.`
         : "The charge updates as you type. Tick the box, then Place order." },
+    { target: [`.side-nav [data-nav="recent"]`, `.tabbar [data-nav="more"]`], title: "See it working",
+      text: `<strong>Recently completed</strong> shows orders we just delivered for other customers: what, how many and how fast.${matchMedia("(max-width: 760px)").matches ? " Find it under More." : ""}` },
     { target: nav("orders"), title: "Track delivery",
       text: "Follow progress in Orders. If something isn't fully delivered, the undelivered part is refunded to your balance automatically." },
     { target: nav("funds"), title: "Ready for more?",

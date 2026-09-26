@@ -281,6 +281,29 @@ async def list_orders(status: str | None = None, q: str | None = None,
     return rows
 
 
+# Recently completed, across all customers: what was delivered and how fast, never who or where
+# (no links, emails or order owners). Shared by everyone, so it's cached briefly.
+RECENT_LIMIT = 30
+_recent: tuple[float, list] = (0.0, [])
+
+
+@router.get("/recently-completed")
+async def recently_completed(user: dict = Depends(current_user)):
+    global _recent
+    if time.monotonic() - _recent[0] >= 60:
+        async with transaction() as db:
+            rows = await db.fetch_all(f"""
+                select s.platform, s.category, s.name as service_name, s.tier, o.quantity, o.completed_at,
+                       extract(epoch from (o.completed_at - o.created_at))::int as took_seconds
+                  from orders o join services s on s.id = o.service_id
+                 where o.status = 'completed' and o.completed_at is not null
+                 order by o.completed_at desc
+                 limit {RECENT_LIMIT}
+            """)
+        _recent = (time.monotonic(), rows)
+    return _recent[1]
+
+
 @router.post("/{order_id}/refill")
 async def request_refill(order_id: int, user: dict = Depends(current_user)):
     return {"ok": True, "refill_id": await refill_order(order_id, user["id"])}

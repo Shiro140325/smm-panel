@@ -136,6 +136,7 @@ def privacy() -> str:
   <li>To keep financial records as tax and accounting law requires (legal obligation).</li>
   <li>To answer you when you contact support.</li>
 </ul>
+<p>Logged-in customers can see a "Recently completed" list of orders delivered on the site. It shows only the service, quantity and delivery time, never your link, account, email or name.</p>
 <p>We don't sell your data, we don't use advertising trackers or third-party analytics, and we don't send marketing email.</p>
 
 <h2>Who we share it with</h2>

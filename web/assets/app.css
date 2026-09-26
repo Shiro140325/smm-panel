@@ -743,3 +743,17 @@ a.pill { text-decoration: none; }
 .tour-actions .grow { flex: 1; }
 .tour-actions .tour-skip { padding-left: 0; color: var(--muted); }
 @media (prefers-reduced-motion: reduce) { .tour-hole, .tour-card { transition: none; } }
+
+/* Recently completed */
+.recent-table .svc { font-weight: 600; }
+@media (max-width: 760px) {
+  .recent-table thead { display: none; }
+  .recent-table, .recent-table tbody, .recent-table tr, .recent-table td { display: block; width: 100%; }
+  .recent-table tr { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 14px 16px; border-bottom: 1px solid var(--line-2); }
+  .recent-table td { border: 0; padding: 0; }
+  .recent-table td[data-col="svc"] { grid-column: 1 / -1; }
+  .recent-table .num { text-align: left; }
+  .recent-table td[data-col="qty"]::before { content: "Qty "; color: var(--muted); }
+  .recent-table td[data-col="took"]::before { content: "Delivered in "; color: var(--muted); }
+  .recent-table td[data-col="when"] { grid-column: 1 / -1; font-size: 13px; }
+}
