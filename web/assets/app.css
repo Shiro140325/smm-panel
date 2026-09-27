@@ -769,3 +769,62 @@ a.pill { text-decoration: none; }
   background: transparent; color: inherit; font-size: 22px; line-height: 1; cursor: pointer; opacity: .6; }
 .announce-x:hover { opacity: 1; background: rgba(0, 0, 0, .06); }
 @media (max-width: 760px) { .announce { font-size: 13px; padding: 8px 44px 8px 16px; text-align: left; } }
+
+/* ==========================================================================
+   Tier badges + the animated badge introduction (badges.js)
+   ========================================================================== */
+.tier-badge { display: inline-block; vertical-align: middle; flex: none; }
+.bi { position: fixed; inset: 0; z-index: 110; display: grid; place-items: center; padding: 16px; }
+.bi-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, .62); animation: bi-fade .25s ease both; }
+.bi-card { position: relative; width: min(400px, 100%); background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 22px; padding: 26px 26px 22px; box-shadow: 0 30px 70px rgba(0, 0, 0, .4); text-align: center; outline: none;
+  display: flex; flex-direction: column; align-items: center; gap: 8px; animation: bi-pop .45s cubic-bezier(.2, .9, .25, 1.15) both; }
+.bi-card .tour-note { align-self: stretch; margin-bottom: 4px; }
+.bi-stage { position: relative; width: 150px; height: 150px; display: grid; place-items: center; margin: 6px 0 8px; }
+.bi-badge { width: 118px; height: 118px; position: relative; z-index: 1; animation: bi-settle .5s ease 1.3s both; }
+.bi-outline { stroke-dasharray: 1; stroke-dashoffset: 1;
+  animation: bi-draw .8s cubic-bezier(.65, 0, .35, 1) .25s forwards, bi-solid 1ms linear 1.06s forwards; }   /* then a plain line: no seam where it started */
+.bi-mark { transform-box: fill-box; transform-origin: center; opacity: 0; }
+.bi-member .bi-mark { animation: bi-rise .5s cubic-bezier(.2, .9, .25, 1.4) .95s forwards; }
+.bi-pro .bi-mark { animation: bi-gem .55s cubic-bezier(.2, .9, .25, 1.4) .95s forwards; }
+.bi-elite .bi-mark { animation: bi-star .75s cubic-bezier(.2, .9, .25, 1.2) .95s forwards; }
+.bi-glow { position: absolute; inset: 0; border-radius: 50%; opacity: 0;
+  background: radial-gradient(circle, color-mix(in srgb, var(--ink) 16%, transparent) 0%, transparent 68%); }
+.bi-pro .bi-glow { animation: bi-glow .9s ease-out 1.1s both; }
+.bi-elite .bi-glow { animation: bi-glow .9s ease-out 1.1s both, bi-breathe 2.6s ease-in-out 2s infinite; }
+.bi-sparks { position: absolute; inset: 0; pointer-events: none; }
+.bi-sparks i { position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px; background: var(--ink);
+  transform: rotate(var(--a)) translateY(0) rotate(45deg) scale(0); opacity: 0; animation: bi-spark .75s cubic-bezier(.2, .7, .3, 1) 1.2s forwards; }
+.bi-elite .bi-sparks i:nth-child(even) { width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px; animation-delay: 1.3s; }
+.bi-kicker { font-family: var(--font-mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+  animation: bi-up .4s ease 1.35s both; }
+.bi-card h2 { font-size: 32px; letter-spacing: -.02em; animation: bi-up .4s ease 1.45s both; }
+.bi-card h2 em { font-style: normal; background: var(--ink); color: var(--surface); border-radius: 10px; padding: 0 .16em; }
+.bi-perks { list-style: none; padding: 0; margin: 8px 0 12px; display: flex; flex-direction: column; gap: 8px; align-self: stretch; }
+.bi-perks li { display: flex; gap: 10px; align-items: flex-start; text-align: left; font-size: 15px; color: var(--ink-2); line-height: 1.45;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; animation: bi-up .4s ease both; animation-delay: calc(1.6s + var(--i) * .12s); }
+.bi-perks li::before { content: ""; flex: none; width: 7px; height: 7px; margin-top: 7px; background: var(--ink); transform: rotate(45deg); }
+.bi-perks strong { color: var(--ink); }
+.bi-close { align-self: stretch; animation: bi-up .4s ease 2.1s both; }
+.bi-out .bi-card { animation: bi-leave .2s ease forwards; }
+.bi-out .bi-backdrop { animation: bi-fade .2s ease reverse forwards; }
+
+@keyframes bi-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes bi-pop { from { opacity: 0; transform: translateY(14px) scale(.92); } to { opacity: 1; transform: none; } }
+@keyframes bi-leave { to { opacity: 0; transform: scale(.96); } }
+@keyframes bi-draw { to { stroke-dashoffset: 0; } }
+@keyframes bi-solid { to { stroke-dasharray: none; stroke-dashoffset: 0; } }
+@keyframes bi-rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes bi-gem { 0% { opacity: 0; transform: scale(0) rotate(-90deg); } 70% { opacity: 1; transform: scale(1.12) rotate(6deg); } 100% { opacity: 1; transform: none; } }
+@keyframes bi-star { 0% { opacity: 0; transform: scale(0) rotate(-180deg); } 70% { opacity: 1; transform: scale(1.05) rotate(6deg); } 100% { opacity: 1; transform: none; } }
+@keyframes bi-settle { 0%, 100% { transform: none; } 45% { transform: scale(1.06); } }
+@keyframes bi-glow { 0% { opacity: 0; transform: scale(.5); } 50% { opacity: 1; } 100% { opacity: .55; transform: scale(1.15); } }
+@keyframes bi-breathe { 0%, 100% { opacity: .55; transform: scale(1.15); } 50% { opacity: .9; transform: scale(1.25); } }
+@keyframes bi-spark { 0% { opacity: 0; transform: rotate(var(--a)) translateY(0) rotate(45deg) scale(.3); }
+  25% { opacity: 1; } 100% { opacity: 0; transform: rotate(var(--a)) translateY(-78px) rotate(45deg) scale(1); } }
+@keyframes bi-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .bi *, .bi { animation-duration: 1ms !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; }
+  .bi-sparks { display: none; }
+}

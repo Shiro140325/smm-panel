@@ -3,6 +3,7 @@ import {
 } from "./common.js";
 import { icons } from "./icons.js";
 import { startTour } from "./tour.js";
+import { showBadgeIntro, TIERS } from "./badges.js";
 
 initTheme(icons);
 showAnnouncement();
@@ -1201,6 +1202,9 @@ async function runWelcomeGuide({ credit, preview }) {
   let pending = null;
   try { pending = localStorage.getItem("tour"); } catch { /* private mode */ }
   const preview = new URLSearchParams(location.search).get("tour") === "preview";
-  if (preview) runWelcomeGuide({ credit: 7, preview: true });
+  // tier badge introduction preview: ?badge=member | pro | elite (the tier system itself isn't live yet)
+  const badge = new URLSearchParams(location.search).get("badge");
+  if (badge && TIERS[badge]) showBadgeIntro(badge, { note: "Preview: how a customer's tier badge is introduced." });
+  else if (preview) runWelcomeGuide({ credit: 7, preview: true });
   else if (pending) runWelcomeGuide({ credit: Number(pending) || 0, preview: false });
 })();
