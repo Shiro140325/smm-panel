@@ -1,4 +1,4 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" fill="none">
-  <path d="M20 10 H44 L57 24 L32 57 L7 24 Z" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/>
-  <path d="M7 24 H57 M20 10 L25 24 L32 57 M44 10 L39 24 L32 57 M25 24 L32 10 L39 24" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>
+  <polygon points="32.00,5.00 55.38,18.50 55.38,45.50 32.00,59.00 8.62,45.50 8.62,18.50" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/>
+  <polygon points="32,19 45,32 32,45 19,32" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
 </svg>
