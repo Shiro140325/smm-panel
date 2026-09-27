@@ -1,10 +1,10 @@
-"""Free trial order for new accounts: one order of TRIAL_QTY on the cheapest TikTok views service.
+"""Free trial order for new accounts: one order of up to TRIAL_QTY on TRIAL_SERVICE_ID.
 
 One per account, per link, per device (a random id the browser keeps in storage and a cookie)
 and per network (IP address, 30 days).
 
 Replaces the old welcome credit, which people could spend on anything. The trial is free only
-on the trial service at exactly the trial quantity, once per account and once per link, and
+on the trial service up to the trial quantity, once per account and once per link, and
 only for accounts created after it was introduced (users.trial_used_at is set for older ones).
 """
 import re
@@ -15,19 +15,19 @@ from fastapi import Request
 from app.config import get_settings
 from app.pricing import SERVICE_SELECT
 
-TRIAL_QTY = 1000
+TRIAL_SERVICE_ID = 237   # Facebook Post Reaction (Care)
+TRIAL_QTY = 100          # the most a trial order can be; any amount from the service minimum up to this is free
 _cache: tuple[float, int | None] = (0.0, None)
 
 
 async def trial_service_id(db) -> int | None:
-    """The cheapest orderable TikTok views service that takes TRIAL_QTY (re-picked every 10 minutes)."""
+    """TRIAL_SERVICE_ID while it's orderable and takes TRIAL_QTY (checked every 10 minutes)."""
     global _cache
-    if _cache[1] and time.monotonic() - _cache[0] < 600:   # "none found" is never cached
+    if _cache[1] and time.monotonic() - _cache[0] < 600:   # "not orderable" is never cached
         return _cache[1]
     sid = await db.fetch_val(SERVICE_SELECT + """
-        and s.platform = 'tiktok' and s.category = 'Views'
-        and ps.min_qty <= :q and ps.max_qty >= :q and lower(coalesce(ps.type, '')) <> 'custom comments'
-        order by ps.rate, s.id limit 1""", {"q": TRIAL_QTY})
+        and s.id = :id and ps.min_qty <= :q and ps.max_qty >= :q
+        and lower(coalesce(ps.type, '')) <> 'custom comments' limit 1""", {"id": TRIAL_SERVICE_ID, "q": TRIAL_QTY})
     _cache = (time.monotonic(), sid)
     return sid
 

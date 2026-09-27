@@ -75,8 +75,8 @@ async def place_order(user_id: int, service_id: int, link: str, quantity: int, c
         price = order_price_php(per_1k, quantity)
 
         await db.execute("select id from users where id = :u for update", {"u": user_id})
-        # the free trial: this account's first order of the trial service at exactly the trial quantity
-        if source == "web" and quantity == TRIAL_QTY and trial_ctx is not None:   # single website orders only
+        # the free trial: this account's first order of the trial service, up to the trial quantity
+        if source == "web" and quantity <= TRIAL_QTY and trial_ctx is not None:   # single website orders only
             t = await trial_for(db, user_id, trial_ctx["device"], trial_ctx["ip"])
             if t["available"] and svc["id"] == t["service_id"]:
                 if await db.fetch_val("select 1 from orders where source = 'trial' and lower(link) = lower(:l) limit 1",

@@ -528,7 +528,7 @@ function updateCharge() {
   if (!chargeEl) return;
   chargeEl.textContent = peso(charge);
   const note = document.getElementById("charge-note");
-  if (note) note.textContent = trialApplies(svc, qty) ? `Free trial: your first ${num(qty)} are on us`
+  if (note) note.textContent = trialApplies(svc, qty) ? `Free trial: up to ${num(state.user.trial.quantity)} on us`
     : tierDiscount() && charge ? `Includes your ${TIER_NAME[state.user.tier.name]} discount (${tierDiscount()}% off)` : "";
   document.getElementById("qty-count").textContent = svc?.custom_comments
     ? `${num(qty)} comment${qty === 1 ? "" : "s"} · min ${num(svc.min)}, max ${num(svc.max)}`
@@ -1212,14 +1212,14 @@ function renderFunds(params) {
 
 /* ----------------------------------------------------------- welcome guide */
 
-// The free trial order (server-picked service, fixed quantity): /auth/me → trial
+// The free trial order (server-picked service, up to trial.quantity): /auth/me → trial
 function trialOffer(preview = false) {
   const t = state.user?.trial;
   const svc = t?.service_id ? state.services.find((x) => x.id === t.service_id) : null;
   return svc && (t.available || preview) ? { s: svc, qty: t.quantity } : null;
 }
 const trialApplies = (svc, qty) => !!(state.user?.trial?.available && svc && svc.id === state.user.trial.service_id
-                                     && qty === state.user.trial.quantity);
+                                     && qty > 0 && qty <= state.user.trial.quantity);
 const chargeFor = (svc, qty) => (trialApplies(svc, qty) ? 0 : myCharge(svc.price_per_1k_php, qty));
 
 function applyTrial(trial) {
@@ -1233,7 +1233,7 @@ function applyTrial(trial) {
 async function runWelcomeGuide({ preview, then }) {
   await servicesLoad;
   const trial = trialOffer(preview);
-  const what = trial ? `${num(trial.qty)} ${esc(PLATFORMS[trial.s.platform] || trial.s.platform)} ${esc((trial.s.category || "").toLowerCase())}` : "";
+  const what = trial ? `up to ${num(trial.qty)} ${esc(PLATFORMS[trial.s.platform] || trial.s.platform)} ${esc((trial.s.category || "").toLowerCase())}` : "";
   const onPage = (hash) => () => new Promise((r) => {
     if (location.hash === hash) return r();
     location.hash = hash;

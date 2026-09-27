@@ -605,37 +605,37 @@ async def main():
     check("api: regenerating revokes the old key", (await v2(key=key, action="balance")).json() == {"error": "Invalid API key"})
     await c3.aclose()
 
-    # --- free trial order: 1,000 of the cheapest TikTok views, once per account and per link, no balance needed
+    # --- free trial order: up to 100 on service 237, once per account and per link, no balance needed
     await sql("insert into provider_services (provider_id, provider_service_id, name, category, type, rate, min_qty, max_qty) "
-              "values (1, 9001, 'TikTok Views', 'TikTok Views', 'Default', 0.001, 100, 1000000)")
-    tsid = (await sql("insert into services (provider_id, provider_service_id, platform, category, name, tier) "
-                      "values (1, 9001, 'tiktok', 'Views', 'TikTok Views', 'Basic') returning id"))[0]["id"]
+              "values (1, 9001, 'Facebook Post Reaction', 'Facebook Reactions', 'Default', 0.001, 10, 100000)")
+    tsid = (await sql("insert into services (id, provider_id, provider_service_id, platform, category, name, tier) "
+                      "values (237, 1, 9001, 'facebook', 'Reactions', 'Facebook Post Reaction', 'Basic') returning id"))[0]["id"]
     def dev_client(dev, ip):
         return httpx.AsyncClient(base_url=API, headers={"X-Device": dev * 32, "cf-connecting-ip": ip})
     cn = dev_client("a", "10.9.0.1")
     r = await cn.post("/auth/register", json={"email": "trial@example.com", "password": "password123"})
-    check("trial: offered at sign-up on the cheapest TikTok views", r.json()["trial"] == {"service_id": tsid, "quantity": 1000, "available": True}, r.text)
-    r = await cn.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/1", "quantity": 500})
-    check("trial: other quantities aren't free", r.status_code == 402, r.text)
-    r = await cn.post("/orders", json={"service_id": 1, "link": "https://tiktok.com/@t/video/1", "quantity": 1000})
+    check("trial: offered at sign-up on service 237, up to 100", r.json()["trial"] == {"service_id": tsid, "quantity": 100, "available": True}, r.text)
+    r = await cn.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/1", "quantity": 101})
+    check("trial: more than 100 isn't free", r.status_code == 402, r.text)
+    r = await cn.post("/orders", json={"service_id": 1, "link": "https://tiktok.com/@t/video/1", "quantity": 100})
     check("trial: other services aren't free", r.status_code == 402, r.text)
-    r = await cn.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/1", "quantity": 1000})
-    check("trial: 1,000 views free with no balance", r.status_code == 200 and r.json()["charge_php"] == 0 and r.json()["free_trial"], r.text)
+    r = await cn.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/1", "quantity": 100})
+    check("trial: 100 free with no balance", r.status_code == 200 and r.json()["charge_php"] == 0 and r.json()["free_trial"], r.text)
     me_t = (await cn.get("/auth/me")).json()
     check("trial: used up, balance untouched, not counted toward tiers", me_t["trial"]["available"] is False
           and me_t["balance_php"] == 0 and me_t["tier"]["spent_php"] == 0, me_t)
-    r = await cn.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/2", "quantity": 1000})
+    r = await cn.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/2", "quantity": 100})
     check("trial: only once per account", r.status_code == 402, r.text)
     cn2 = dev_client("b", "10.9.0.2")
     await cn2.post("/auth/register", json={"email": "trial2@example.com", "password": "password123"})
-    r = await cn2.post("/orders", json={"service_id": tsid, "link": "https://TIKTOK.com/@t/video/1", "quantity": 1000})
+    r = await cn2.post("/orders", json={"service_id": tsid, "link": "https://TIKTOK.com/@t/video/1", "quantity": 100})
     check("trial: only once per link, even from another account", r.status_code == 400 and "already had a free trial" in r.text, r.text)
     await sql("update users set trial_used_at = now() where email = 'trial2@example.com'")
     check("trial: accounts from before the trial don't get it", (await cn2.get("/auth/me")).json()["trial"]["available"] is False)
     cn3 = dev_client("a", "10.9.0.3")   # same device, new account and network
     r = await cn3.post("/auth/register", json={"email": "trial3@example.com", "password": "password123"})
     check("trial: one per device, even on a new account", r.json()["trial"]["available"] is False, r.text)
-    r = await cn3.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/3", "quantity": 1000})
+    r = await cn3.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/3", "quantity": 100})
     check("trial: same device can't order it free", r.status_code == 402, r.text)
     cn4 = dev_client("c", "10.9.0.1")   # new device, same network within 30 days
     r = await cn4.post("/auth/register", json={"email": "trial4@example.com", "password": "password123"})
@@ -643,8 +643,8 @@ async def main():
     cn5 = dev_client("d", "10.9.0.5")
     r = await cn5.post("/auth/register", json={"email": "trial5@example.com", "password": "password123"})
     check("trial: a new device on a new network still gets it", r.json()["trial"]["available"] is True, r.text)
-    r = await cn5.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/5", "quantity": 1000})
-    check("trial: device and network recorded", r.status_code == 200 and (await sql(
+    r = await cn5.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/5", "quantity": 50})
+    check("trial: less than 100 is free too; device and network recorded", r.status_code == 200 and (await sql(
         "select trial_device, trial_ip from users where email = 'trial5@example.com'"))[0] == {"trial_device": "d" * 32, "trial_ip": "10.9.0.5"}, r.text)
     await sql("update users set trial_used_at = now() - interval '31 days' where email = 'trial@example.com'")
     r = await dev_client("e", "10.9.0.1").post("/auth/register", json={"email": "trial6@example.com", "password": "password123"})
