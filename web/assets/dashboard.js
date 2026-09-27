@@ -52,6 +52,7 @@ function setBalance(v) {
 
 async function refreshMe() {
   const me = await api("/auth/me");
+  if (state.previewMode && me.trial) me.trial.available = true;   // ?tour=preview shows the new-customer trial
   state.user = me;
   setBalance(me.balance_php);
   document.getElementById("user-email").textContent = me.email;
@@ -541,8 +542,9 @@ function updateCharge() {
     msg.innerHTML = "";
   }
   const btn = document.getElementById("place");
-  btn.disabled = !!problem || state.placing;
+  btn.disabled = !!problem || state.placing || !!state.previewMode;
   btn.textContent = state.placing ? "Placing order…" : trialApplies(svc, qty) ? "Place free order" : "Place order";
+  if (state.previewMode) btn.title = "Preview: ordering is turned off";
 }
 
 function svcOptionsHTML(shown) {
@@ -1266,7 +1268,7 @@ async function runWelcomeGuide({ preview, then }) {
       next: trial ? "Try my free order" : "Start ordering" },
   ];
   startTour(steps, {
-    note: preview ? "Preview: this is what new customers see. Nothing is ordered." : "",
+    note: preview ? "Preview: this is what new customers see. Ordering is turned off." : "",
     onClose: () => {
       try { localStorage.removeItem("tour"); } catch { /* private mode */ }
       if (route().name === "new") document.getElementById("link")?.scrollIntoView({ block: "center" });
@@ -1305,7 +1307,13 @@ async function runWelcomeGuide({ preview, then }) {
   // tier badge introduction preview: ?badge=member | pro | elite (the tier system itself isn't live yet)
   const badge = new URLSearchParams(location.search).get("badge");
   if (badge && TIERS[badge]) showBadgeIntro(badge, { note: "Preview: how a customer's tier badge is introduced." });
-  else if (preview) runWelcomeGuide({ preview: true });
+  else if (preview) {
+    // what a brand-new customer sees: their free trial on the form (display only, ordering off), the guide, then the Member card
+    state.previewMode = true;
+    if (state.user?.trial) state.user.trial = { ...state.user.trial, available: true };
+    const note = "Preview: this is what new customers see. Ordering is turned off.";
+    runWelcomeGuide({ preview: true, then: () => showBadgeIntro("member", { note }) });
+  }
   else if (pending) runWelcomeGuide({ preview: false, then: () => { tierCardGate = true; maybeTierCard(); } });
   else { tierCardGate = true; maybeTierCard(); }
 })();
