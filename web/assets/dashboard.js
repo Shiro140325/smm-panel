@@ -61,6 +61,28 @@ async function refreshMe() {
   return me;
 }
 
+/* ---------------------------------------------------------------- ?debug=1 */
+
+function showDebug() {
+  const chip = document.querySelector("[data-tier-chip]");
+  const cs = chip ? getComputedStyle(chip) : null;
+  const r = chip?.getBoundingClientRect();
+  const info = {
+    build: document.querySelector('script[src*="dashboard.js"]')?.src.split("?v=")[1] || "?",
+    ua: navigator.userAgent,
+    viewport: `${innerWidth}x${innerHeight} @${devicePixelRatio}`,
+    tier: state.user?.tier || null,
+    chip: chip ? { display: cs.display, visibility: cs.visibility, w: Math.round(r.width), h: Math.round(r.height), html: chip.innerHTML.length } : "missing",
+    sidebar: getComputedStyle(document.querySelector(".sidebar")).display,
+  };
+  const box = document.createElement("pre");
+  box.style.cssText = "position:fixed;left:8px;right:8px;bottom:8px;z-index:200;max-height:50vh;overflow:auto;background:#111;color:#0f0;font:12px/1.4 monospace;padding:10px;border-radius:8px;white-space:pre-wrap";
+  box.textContent = JSON.stringify(info, null, 2);
+  document.body.appendChild(box);
+  fetch("/client-error", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ page: "debug", message: JSON.stringify(info).slice(0, 1900) }) }).catch(() => {});
+}
+
 /* ---------------------------------------------------------------- tiers */
 
 const TIER_NAME = { member: "Member", pro: "Pro", elite: "Elite" };
@@ -1280,6 +1302,7 @@ async function runWelcomeGuide({ credit, preview, then }) {
   }
   render();   // Orders and Add funds draw now; New order and Mass order draw when the list arrives
   window.__dashReady = true;
+  if (new URLSearchParams(location.search).get("debug") === "1") setTimeout(showDebug, 3000);
 
   // welcome guide: right after sign-up (the login page leaves a note), or ?tour=preview to see it
   let pending = null;
