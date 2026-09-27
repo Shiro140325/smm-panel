@@ -1267,10 +1267,16 @@ async function runWelcomeGuide({ preview, then }) {
       text: "Add funds by QR Ph with GCash, Maya or your bank app, from ₱100. Your balance updates within a minute.",
       next: trial ? "Try my free order" : "Start ordering" },
   ];
+  // new customers can't skip it; the step they're on is saved, so a reload or a later visit resumes there
+  let start = 0;
+  if (!preview) try { start = parseInt(localStorage.getItem("tourStep") || "0", 10) || 0; } catch { /* private mode */ }
   startTour(steps, {
     note: preview ? "Preview: this is what new customers see. Ordering is turned off." : "",
+    skippable: false,
+    start,
+    onStep: (i) => { if (!preview) try { localStorage.setItem("tourStep", String(i)); } catch { /* private mode */ } },
     onClose: () => {
-      try { localStorage.removeItem("tour"); } catch { /* private mode */ }
+      try { localStorage.removeItem("tour"); localStorage.removeItem("tourStep"); } catch { /* private mode */ }
       if (route().name === "new") document.getElementById("link")?.scrollIntoView({ block: "center" });
       then?.();
     },

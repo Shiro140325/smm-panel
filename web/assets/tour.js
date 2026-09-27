@@ -1,6 +1,8 @@
 // Step-by-step guide: dims the page, spotlights one element at a time and explains it.
 // A step is { target: [selectors] | null, title, text, enter?(): Promise|void, next?: label }.
 // The first visible match of `target` is spotlighted; no target shows a centered card.
+// Options: skippable (false hides Skip and ignores Escape), start (step to open at; earlier steps'
+// enter() still run so the page is set up), onStep(i) (called as each step shows).
 
 import { esc } from "./common.js";
 
@@ -8,7 +10,7 @@ let active = null;
 
 export function tourActive() { return !!active; }
 
-export function startTour(steps, { note = "", onClose } = {}) {
+export function startTour(steps, { note = "", onClose, skippable = true, start = 0, onStep } = {}) {
   endTour();
   const root = document.createElement("div");
   root.className = "tour";
@@ -66,7 +68,7 @@ export function startTour(steps, { note = "", onClose } = {}) {
       <h3 id="tour-title">${step.title}</h3>
       <p>${step.text}</p>
       <div class="tour-actions">
-        ${last ? "" : `<button type="button" class="btn btn-ghost tour-skip">Skip</button>`}
+        ${last || !skippable ? "" : `<button type="button" class="btn btn-ghost tour-skip">Skip</button>`}
         <span class="grow"></span>
         ${i > 0 ? `<button type="button" class="btn btn-secondary tour-back">Back</button>` : ""}
         <button type="button" class="btn btn-primary tour-next">${esc(step.next || (last ? "Done" : "Next"))}</button>
@@ -77,10 +79,11 @@ export function startTour(steps, { note = "", onClose } = {}) {
     place();
     card.focus({ preventScroll: true });
     busy = false;
+    onStep?.(i);
   }
 
   const onKey = (e) => {
-    if (e.key === "Escape") endTour();
+    if (e.key === "Escape") { if (skippable) endTour(); }
     else if (e.key === "ArrowRight" && !busy) card.querySelector(".tour-next")?.click();
     else if (e.key === "ArrowLeft" && !busy && i > 0) show(i - 1);
   };
@@ -93,7 +96,11 @@ export function startTour(steps, { note = "", onClose } = {}) {
     removeEventListener("resize", onMove);
     removeEventListener("scroll", onMove, true);
   }, onClose, steps };
-  show(0);
+  const at = Math.min(Math.max(0, start | 0), steps.length - 1);
+  (async () => {
+    for (let k = 0; k < at; k++) { try { await steps[k].enter?.(); } catch { /* best effort */ } }
+    show(at);
+  })();
 }
 
 export function endTour(finished = false) {
