@@ -81,9 +81,26 @@ function tierProgress(t) {
   return { pct, text: `${peso(left).replace(".00", "")} more to ${TIER_NAME[t.next.name]}` };
 }
 
+// The chip and badge live in dashboard/index.html; add them if an older cached copy of that page lacks them.
+function ensureTierSlots() {
+  const card = document.querySelector(".balance-card");
+  if (card && !card.querySelector("[data-tier-chip]")) {
+    card.insertAdjacentHTML("beforeend", `<button type="button" class="tier-chip" data-tier-chip aria-label="Your tier"></button>`);
+    card.lastElementChild.addEventListener("click", openTierCard);
+  }
+  const bal = document.querySelector(".topbar .bal");
+  if (bal && !document.querySelector("[data-tier-top]")) {
+    bal.insertAdjacentHTML("beforebegin", `<button type="button" class="tier-top" data-tier-top aria-label="Your tier"></button>`);
+    bal.previousElementSibling.addEventListener("click", openTierCard);
+  }
+}
+
+function openTierCard() { if (state.user?.tier) showBadgeIntro(state.user.tier.name); }
+
 function paintTier() {
   const t = state.user?.tier;
   if (!t) return;
+  ensureTierSlots();
   const p = tierProgress(t);
   document.querySelectorAll("[data-tier-chip]").forEach((el) => {
     el.innerHTML = `<span class="tc-top">${badgeSVG(t.name, 18)}<strong>${TIER_NAME[t.name]}</strong>
@@ -98,8 +115,7 @@ function paintTier() {
   });
 }
 
-document.querySelectorAll("[data-tier-chip], [data-tier-top]").forEach((el) =>
-  el.addEventListener("click", () => { if (state.user?.tier) showBadgeIntro(state.user.tier.name); }));
+document.querySelectorAll("[data-tier-chip], [data-tier-top]").forEach((el) => el.addEventListener("click", openTierCard));
 
 // The card for a customer's tier shows once per account (remembered on the server): new
 // customers see it right after the welcome guide, existing ones on their next visit, and
