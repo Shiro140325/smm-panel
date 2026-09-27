@@ -466,6 +466,18 @@ async def main():
     check("timing: under 15 orders, no average yet but a last completion", t_hq.get("n", 0) >= 1
           and t_hq.get("avg_seconds") is None and t_hq.get("last_seconds") is not None, (timing, o_hq))
 
+    # --- fixed peso price per service (overrides the markup while it stays above cost)
+    base = next(x for x in (await c.get("/services")).json() if x["id"] == 1)["price_per_1k_php"]
+    await sql("update services set price_php = 40 where id = 1")   # cost: $0.50 × 58 = ₱29
+    s1 = next(x for x in (await c.get("/services")).json() if x["id"] == 1)
+    check("fixed price shown instead of the markup price", s1["price_per_1k_php"] == 40.0, s1)
+    r = await c.post("/orders", json={"service_id": 1, "link": "https://tiktok.com/@fixed", "quantity": 1000})
+    check("fixed price charged", r.status_code == 200 and r.json()["charge_php"] == 40.0, r.text)
+    await sql("update services set price_php = 30 where id = 1")   # under cost + 5%
+    s1 = next(x for x in (await c.get("/services")).json() if x["id"] == 1)
+    check("fixed price below cost is ignored (markup price instead)", s1["price_per_1k_php"] == base != 30, (s1, base))
+    await sql("update services set price_php = null where id = 1")
+
     # --- referral program
     aff = (await c.get("/account/affiliate")).json()
     check("affiliate: code and link", aff["code"] and aff["link"].endswith("/?ref=" + aff["code"]) and aff["pct"] == 5, aff)

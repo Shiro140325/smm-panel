@@ -46,7 +46,7 @@ def _row(r) -> dict:
         "custom_comments": (r["type"] or "").strip().lower() == "custom comments",
         "min": r["min_qty"],
         "max": r["max_qty"],
-        "price_per_1k_php": price_per_1k_php(r["rate"], r["currency"], r["markup_pct"]),
+        "price_per_1k_php": price_per_1k_php(r["rate"], r["currency"], r["markup_pct"], r["price_php"]),
     }
 
 

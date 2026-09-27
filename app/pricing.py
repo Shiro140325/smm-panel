@@ -16,6 +16,7 @@ def fx_to_php(currency: str) -> float:
 # percentage to be worth selling at all, expensive ones a smaller one to stay competitive.
 MARKUP_BANDS = [(0.05, 250.0), (0.50, 120.0)]   # (USD per 1K below, markup %)
 MARKUP_DEFAULT = 50.0
+FIXED_MIN_OVER_COST = 1.05   # a fixed price must stay at least 5% above cost to apply
 
 
 def tiered_markup(rate_usd: float) -> float:
@@ -25,9 +26,13 @@ def tiered_markup(rate_usd: float) -> float:
     return MARKUP_DEFAULT
 
 
-def price_per_1k_php(rate: float, currency: str, markup_pct: float | None) -> float:
-    """Customer price per 1,000 in PHP, rounded up to the centavo."""
+def price_per_1k_php(rate: float, currency: str, markup_pct: float | None, fixed_php: float | None = None) -> float:
+    """Customer price per 1,000 in PHP, rounded up to the centavo. A fixed peso price (services.price_php)
+    wins over the markup, so it doesn't move with the exchange rate."""
     fx_rate = fx_to_php(currency)
+    if fixed_php is not None and float(fixed_php) >= float(rate) * fx_rate * FIXED_MIN_OVER_COST:
+        return round(float(fixed_php), 2)
+    # (a fixed price that no longer covers the provider's cost is ignored: the markup applies instead)
     if markup_pct is None:
         rate_usd = float(rate) if (currency or "USD").upper() == "USD" else float(rate) * fx_rate / fx.usd_to_php()
         markup_pct = tiered_markup(rate_usd)
@@ -42,7 +47,7 @@ def order_price_php(per_1k: float, quantity: int) -> float:
 
 SERVICE_SELECT = """
     select s.id, s.platform, s.category, s.auto, s.sort, s.name, s.tier, s.description, s.start_time, s.speed,
-           s.drop_risk, s.refill_days, s.markup_pct, s.provider_id, s.provider_service_id,
+           s.drop_risk, s.refill_days, s.markup_pct, s.price_php, s.provider_id, s.provider_service_id,
            ps.rate, ps.min_qty, ps.max_qty, ps.type, ps.name as provider_name, p.currency
       from services s
       join provider_services ps

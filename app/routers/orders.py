@@ -63,7 +63,7 @@ async def place_order(user_id: int, service_id: int, link: str, quantity: int, c
         if not svc["min_qty"] <= quantity <= svc["max_qty"]:
             raise HTTPException(400, f"Quantity must be between {svc['min_qty']} and {svc['max_qty']}")
 
-        per_1k = price_per_1k_php(svc["rate"], svc["currency"], svc["markup_pct"])
+        per_1k = price_per_1k_php(svc["rate"], svc["currency"], svc["markup_pct"], svc["price_php"])
         price = order_price_php(per_1k, quantity)
 
         await db.execute("select id from users where id = :u for update", {"u": user_id})
@@ -165,7 +165,7 @@ async def mass_order(body: MassIn, user: dict = Depends(current_user)):
             errors.append({"line": r["line"], "error": "Custom comments can't be mass ordered. Use New order"}); continue
         if not svc["min_qty"] <= r["quantity"] <= svc["max_qty"]:
             errors.append({"line": r["line"], "error": f"Quantity must be between {svc['min_qty']:,} and {svc['max_qty']:,}"}); continue
-        total += order_price_php(price_per_1k_php(svc["rate"], svc["currency"], svc["markup_pct"]), r["quantity"])
+        total += order_price_php(price_per_1k_php(svc["rate"], svc["currency"], svc["markup_pct"], svc["price_php"]), r["quantity"])
     if errors:
         errors.sort(key=lambda e: e["line"])
         shown = "; ".join(f"Line {e['line']}: {e['error']}" for e in errors[:5])
