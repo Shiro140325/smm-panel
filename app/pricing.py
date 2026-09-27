@@ -12,31 +12,34 @@ def fx_to_php(currency: str) -> float:
     raise ValueError(f"Unsupported provider currency: {currency}")
 
 
-# Tiered markup for services without a fixed markup_pct: cheap services need a bigger
-# percentage to be worth selling at all, expensive ones a smaller one to stay competitive.
-MARKUP_BANDS = [(0.05, 100.0), (0.50, 60.0)]   # (USD per 1K below, markup %)
-MARKUP_DEFAULT = 30.0
+# Markup in pesos, charged like tax brackets on the cost per 1,000: each slice of the cost gets its own
+# rate, so cheap services add a few pesos and expensive ones a small percentage, and the price never
+# jumps at a bracket edge. (cost in PHP per 1K up to, markup % on that slice)
+MARKUP_BRACKETS = [(1, 100.0), (10, 38.0), (30, 24.0), (100, 18.0), (300, 14.0), (1000, 12.0)]
+MARKUP_TOP = 10.0            # on the part of the cost above the last bracket
 FIXED_MIN_OVER_COST = 1.05   # a fixed price must stay at least 5% above cost to apply
 
 
-def tiered_markup(rate_usd: float) -> float:
-    for limit, pct in MARKUP_BANDS:
-        if rate_usd < limit:
-            return pct
-    return MARKUP_DEFAULT
+def markup_php(cost_php: float) -> float:
+    """Pesos added to a cost of cost_php per 1,000."""
+    added, lower = 0.0, 0.0
+    for upper, pct in MARKUP_BRACKETS:
+        if cost_php <= lower:
+            return added
+        added += (min(cost_php, upper) - lower) * pct / 100
+        lower = upper
+    return added + max(cost_php - lower, 0) * MARKUP_TOP / 100
 
 
 def price_per_1k_php(rate: float, currency: str, markup_pct: float | None, fixed_php: float | None = None) -> float:
     """Customer price per 1,000 in PHP, rounded up to the centavo. A fixed peso price (services.price_php)
-    wins over the markup, so it doesn't move with the exchange rate."""
-    fx_rate = fx_to_php(currency)
-    if fixed_php is not None and float(fixed_php) >= float(rate) * fx_rate * FIXED_MIN_OVER_COST:
+    wins over the markup, so it doesn't move with the exchange rate. A service's own markup_pct wins over
+    the peso brackets."""
+    cost = float(rate) * fx_to_php(currency)
+    if fixed_php is not None and float(fixed_php) >= cost * FIXED_MIN_OVER_COST:
         return round(float(fixed_php), 2)
     # (a fixed price that no longer covers the provider's cost is ignored: the markup applies instead)
-    if markup_pct is None:
-        rate_usd = float(rate) if (currency or "USD").upper() == "USD" else float(rate) * fx_rate / fx.usd_to_php()
-        markup_pct = tiered_markup(rate_usd)
-    raw = float(rate) * fx_rate * (1 + float(markup_pct) / 100)
+    raw = cost * (1 + float(markup_pct) / 100) if markup_pct is not None else cost + markup_php(cost)
     return math.ceil(round(raw * 100, 6)) / 100   # round first: 46.400000000000006 must not become 46.41
 
 
