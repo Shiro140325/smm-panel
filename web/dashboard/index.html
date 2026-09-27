@@ -66,6 +66,20 @@
     <a href="#more" data-nav="more"><span data-icon="more"></span>More</a>
   </nav>
 </div>
+<script>
+/* Report errors (including the dashboard script failing to start) so they can be fixed on devices we can't test. */
+(function () {
+  var sent = 0;
+  function report(msg) {
+    if (sent++ > 5) return;
+    try { navigator.sendBeacon ? navigator.sendBeacon("/client-error", new Blob([JSON.stringify({ page: location.pathname + location.hash, message: String(msg).slice(0, 1900) })], { type: "application/json" }))
+      : fetch("/client-error", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ page: location.pathname, message: String(msg) }) }); } catch (e) {}
+  }
+  window.addEventListener("error", function (e) { report((e.message || "error") + " @ " + (e.filename || "") + ":" + (e.lineno || "") + ":" + (e.colno || "")); }, true);
+  window.addEventListener("unhandledrejection", function (e) { report("unhandled: " + (e.reason && (e.reason.stack || e.reason.message) || e.reason)); });
+  setTimeout(function () { if (!window.__dashReady) report("dashboard did not start"); }, 8000);
+})();
+</script>
 <script type="module" src="/assets/dashboard.js"></script>
 </body>
 </html>

@@ -149,3 +149,12 @@ create table if not exists site_settings (
   value      text not null,
   updated_at timestamptz not null default now()
 );
+
+-- Browser errors reported by the dashboard (for fixing problems on customers' devices).
+create table if not exists client_errors (
+  id         bigserial primary key,
+  created_at timestamptz not null default now(),
+  page       text,
+  message    text,
+  user_agent text
+);

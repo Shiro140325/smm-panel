@@ -1275,9 +1275,11 @@ async function runWelcomeGuide({ credit, preview, then }) {
   } catch (e) {
     if (e.status === 401) { location.replace("/login/"); return; }
     view.innerHTML = `<div class="card empty">${esc(e.message)}</div>`;
+    setTimeout(() => { throw e; });   // surfaces it to the error reporter in dashboard/index.html
     return;
   }
   render();   // Orders and Add funds draw now; New order and Mass order draw when the list arrives
+  window.__dashReady = true;
 
   // welcome guide: right after sign-up (the login page leaves a note), or ?tour=preview to see it
   let pending = null;

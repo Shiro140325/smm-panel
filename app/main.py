@@ -17,7 +17,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app import announcement, fx
 from app.config import get_settings
 from app.site import ASSET_VERSION, not_found_page
-from app.routers import account, admin, api_v2, auth, orders, pages, services, topups, webhooks
+from app.routers import account, admin, api_v2, auth, client_errors, orders, pages, services, topups, webhooks
 from app.workers.sync import run_sync_once
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -54,7 +54,7 @@ app.add_middleware(
 )
 
 for r in (auth.router, services.router, orders.router, topups.router, webhooks.router, admin.router,
-          account.router, api_v2.router, announcement.router, pages.router):
+          account.router, api_v2.router, announcement.router, client_errors.router, pages.router):
     app.include_router(r)
 
 
