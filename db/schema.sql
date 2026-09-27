@@ -14,6 +14,7 @@ alter table users add column if not exists ref_code text;                      -
 alter table users add column if not exists referred_by bigint references users(id);
 alter table users add column if not exists tier_max text;    -- highest tier reached (tiers are kept forever)
 alter table users add column if not exists tier_seen text;   -- tier whose introduction card the customer has seen
+alter table users add column if not exists trial_used_at timestamptz;   -- free trial order used (set for accounts from before the trial)
 create unique index if not exists users_api_key on users (api_key_hash) where api_key_hash is not null;
 create unique index if not exists users_ref_code on users (ref_code) where ref_code is not null;
 create index if not exists users_referred_by on users (referred_by) where referred_by is not null;
@@ -126,7 +127,7 @@ create table if not exists orders (
 );
 alter table orders add column if not exists comments text;   -- for databases created before this column
 alter table orders add column if not exists cancel_requested_at timestamptz;
-alter table orders add column if not exists source text not null default 'web';   -- web | api (API orders don't count toward tiers)
+alter table orders add column if not exists source text not null default 'web';   -- web | api | trial (only web counts toward tiers)
 create index if not exists orders_user on orders (user_id, created_at desc);
 create index if not exists orders_sync on orders (provider_id, status);
 create index if not exists orders_completed_by_service on orders (service_id, completed_at desc) where status = 'completed';   -- service timing

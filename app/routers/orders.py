@@ -11,6 +11,7 @@ from app.pricing import SERVICE_SELECT, order_price_php, price_per_1k_php
 from app.providers.smm_client import ProviderError, SMMClient
 from app.security import balance_of, current_user
 from app.tiers import current_tier, discounted_per_1k
+from app.trial import TRIAL_QTY, trial_for
 from app.workers.sync import sync_user_orders
 
 log = logging.getLogger("orders")
@@ -72,6 +73,15 @@ async def place_order(user_id: int, service_id: int, link: str, quantity: int, c
         price = order_price_php(per_1k, quantity)
 
         await db.execute("select id from users where id = :u for update", {"u": user_id})
+        # the free trial: this account's first order of the trial service at exactly the trial quantity
+        if source == "web" and quantity == TRIAL_QTY:
+            t = await trial_for(db, user_id)
+            if t["available"] and svc["id"] == t["service_id"]:
+                if await db.fetch_val("select 1 from orders where source = 'trial' and lower(link) = lower(:l) limit 1",
+                                      {"l": link}):
+                    raise HTTPException(400, "This link already had a free trial. Use your free trial on a different post or video.")
+                await db.execute("update users set trial_used_at = now() where id = :u", {"u": user_id})
+                price, source = 0.0, "trial"
         if await balance_of(db, user_id) < price:
             raise HTTPException(402, "Not enough balance")
 
@@ -80,10 +90,11 @@ async def place_order(user_id: int, service_id: int, link: str, quantity: int, c
             values (:u, :s, :p, :l, :q, :price, :c, :src) returning id
         """, {"u": user_id, "s": svc["id"], "p": svc["provider_id"], "l": link,
               "q": quantity, "price": price, "c": comments, "src": source})
-        await db.execute(
-            "insert into ledger (user_id, delta, reason, ref) values (:u, :d, 'order', :r)",
-            {"u": user_id, "d": -price, "r": str(order["id"])},
-        )
+        if price > 0:
+            await db.execute(
+                "insert into ledger (user_id, delta, reason, ref) values (:u, :d, 'order', :r)",
+                {"u": user_id, "d": -price, "r": str(order["id"])},
+            )
         provider = await db.fetch_one("select * from providers where id = :p", {"p": svc["provider_id"]})
 
     # 2) place upstream — outside the transaction
@@ -95,6 +106,8 @@ async def place_order(user_id: int, service_id: int, link: str, quantity: int, c
         # provider rejected it: mark failed and refund in full
         async with transaction() as db:
             await _fail_and_refund(db, order["id"], user_id, price)
+            if source == "trial":   # the trial wasn't delivered: give it back
+                await db.execute("update users set trial_used_at = null where id = :u", {"u": user_id})
         raise HTTPException(400, f"Order rejected by provider: {e}")
     except Exception:
         # network error/timeout: we can't know whether it was placed — never auto-refund
@@ -112,7 +125,7 @@ async def place_order(user_id: int, service_id: int, link: str, quantity: int, c
             where id = :id
         """, {"po": provider_order_id, "id": order["id"]})
 
-    return {"id": order["id"], "status": "pending", "quantity": quantity, "charge_php": price}
+    return {"id": order["id"], "status": "pending", "quantity": quantity, "charge_php": price, "free_trial": source == "trial"}
 
 
 # ------------------------------------------------------------------ mass order
@@ -202,10 +215,11 @@ async def _fail_and_refund(db, order_id: int, user_id: int, price: float):
     await db.execute(
         "update orders set status = 'failed', updated_at = now() where id = :id", {"id": order_id}
     )
-    await db.execute("""
-        insert into ledger (user_id, delta, reason, ref) values (:u, :d, 'refund', :r)
-        on conflict do nothing
-    """, {"u": user_id, "d": price, "r": str(order_id)})
+    if price > 0:
+        await db.execute("""
+            insert into ledger (user_id, delta, reason, ref) values (:u, :d, 'refund', :r)
+            on conflict do nothing
+        """, {"u": user_id, "d": price, "r": str(order_id)})
 
 
 _last_live_sync: dict[int, float] = {}

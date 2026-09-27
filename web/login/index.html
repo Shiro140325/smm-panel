@@ -82,8 +82,8 @@
     $("submit").disabled = true;
     try {
       const res = await api(mode === "login" ? "/auth/login" : "/auth/register", { method: "POST", body: mode === "register" && ref ? { email, password, ref } : { email, password } });
-      // new account with a welcome credit: the dashboard opens with the guide
-      if (mode === "register" && res.welcome_php > 0) { try { localStorage.setItem("tour", String(res.welcome_php)); } catch { /* private mode */ } }
+      // new account: the dashboard opens with the welcome guide (and the free trial order, when offered)
+      if (mode === "register") { try { localStorage.setItem("tour", res.trial && res.trial.available ? "trial" : "guide"); } catch { /* private mode */ } }
       location.replace("/dashboard/");
     } catch (ex) {
       err.textContent = ex.message;

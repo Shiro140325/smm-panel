@@ -512,7 +512,7 @@ function validate(svc) {
   if (qty < svc.min) return `Minimum is ${num(svc.min)}`;
   if (qty > svc.max) return `Maximum is ${num(svc.max)}`;
   if (!/^https?:\/\/\S+$/i.test(state.link.trim())) return "Paste a link that starts with https://";
-  const charge = myCharge(svc.price_per_1k_php, qty);
+  const charge = chargeFor(svc, qty);
   if (state.user && charge > state.user.balance_php) return "low-balance";
   if (!state.ack) return "Tick the box to confirm";
   return null;
@@ -521,13 +521,14 @@ function validate(svc) {
 function updateCharge() {
   const svc = selectedService();
   const qty = orderQty(svc);
-  const charge = svc ? myCharge(svc.price_per_1k_php, qty) : 0;
+  const charge = svc ? chargeFor(svc, qty) : 0;
   const problem = validate(svc);
   const chargeEl = document.getElementById("charge");
   if (!chargeEl) return;
   chargeEl.textContent = peso(charge);
   const note = document.getElementById("charge-note");
-  if (note) note.textContent = tierDiscount() && charge ? `Includes your ${TIER_NAME[state.user.tier.name]} discount (${tierDiscount()}% off)` : "";
+  if (note) note.textContent = trialApplies(svc, qty) ? `Free trial: your first ${num(qty)} are on us`
+    : tierDiscount() && charge ? `Includes your ${TIER_NAME[state.user.tier.name]} discount (${tierDiscount()}% off)` : "";
   document.getElementById("qty-count").textContent = svc?.custom_comments
     ? `${num(qty)} comment${qty === 1 ? "" : "s"} · min ${num(svc.min)}, max ${num(svc.max)}`
     : svc ? `Min ${num(svc.min)} · Max ${num(svc.max)}` : "";
@@ -541,7 +542,7 @@ function updateCharge() {
   }
   const btn = document.getElementById("place");
   btn.disabled = !!problem || state.placing;
-  btn.textContent = state.placing ? "Placing order…" : "Place order";
+  btn.textContent = state.placing ? "Placing order…" : trialApplies(svc, qty) ? "Place free order" : "Place order";
 }
 
 function svcOptionsHTML(shown) {
@@ -1209,21 +1210,15 @@ function renderFunds(params) {
 
 /* ----------------------------------------------------------- welcome guide */
 
-// The cheapest way to try the site with the welcome credit: TikTok views (then likes), 1,000 or
-// as many as the credit covers, never below the service minimum.
-function pickTrial(credit) {
-  for (const cat of ["Views", "Likes", null]) {
-    let best = null;
-    for (const s of state.services) {
-      if (s.custom_comments || (cat && (s.platform !== "tiktok" || s.category !== cat))) continue;
-      const qty = Math.min(1000, s.max, Math.floor((credit / s.price_per_1k_php) * 1000 / 10) * 10);
-      if (qty < s.min || orderCharge(s.price_per_1k_php, qty) > credit) continue;
-      if (!best || s.price_per_1k_php < best.s.price_per_1k_php) best = { s, qty };
-    }
-    if (best) return best;
-  }
-  return null;
+// The free trial order (server-picked service, fixed quantity): /auth/me → trial
+function trialOffer(preview = false) {
+  const t = state.user?.trial;
+  const svc = t?.service_id ? state.services.find((x) => x.id === t.service_id) : null;
+  return svc && (t.available || preview) ? { s: svc, qty: t.quantity } : null;
 }
+const trialApplies = (svc, qty) => !!(state.user?.trial?.available && svc && svc.id === state.user.trial.service_id
+                                     && qty === state.user.trial.quantity);
+const chargeFor = (svc, qty) => (trialApplies(svc, qty) ? 0 : myCharge(svc.price_per_1k_php, qty));
 
 function applyTrial(trial) {
   if (!trial) return;
@@ -1233,10 +1228,10 @@ function applyTrial(trial) {
   else renderNew();
 }
 
-async function runWelcomeGuide({ credit, preview, then }) {
+async function runWelcomeGuide({ preview, then }) {
   await servicesLoad;
-  const trial = pickTrial(credit || 7);
-  const creditText = credit ? peso(credit) : "";
+  const trial = trialOffer(preview);
+  const what = trial ? `${num(trial.qty)} ${esc(PLATFORMS[trial.s.platform] || trial.s.platform)} ${esc((trial.s.category || "").toLowerCase())}` : "";
   const onPage = (hash) => () => new Promise((r) => {
     if (location.hash === hash) return r();
     location.hash = hash;
@@ -1245,15 +1240,14 @@ async function runWelcomeGuide({ credit, preview, then }) {
   const nav = (name) => [`.side-nav [data-nav="${name}"]`, `.tabbar [data-nav="${name}"]`];
   const steps = [
     { target: null, title: "Welcome to SMM Shiro!",
-      text: credit
-        ? `We added <strong>${creditText} free credit</strong> to your balance, so you can try a real order before paying anything. This quick guide shows you how. It takes 30 seconds.`
+      text: trial
+        ? `Your first order is on us: <strong>${what}, free</strong>. This quick guide shows you how to place it. It takes 30 seconds.`
         : "This quick guide shows you how to place your first order. It takes 30 seconds.",
       next: "Show me", enter: onPage("#new") },
     { target: [".balance-card", ".topbar .bal"], title: "Your balance",
-      text: credit ? `Your ${creditText} is already here. Orders are paid from this balance, and refunds come back to it.`
-        : "Orders are paid from this balance, and refunds come back to it." },
+      text: `Orders are paid from this balance, and refunds come back to it.${trial ? " Your free trial doesn't need any balance." : ""}` },
     { target: ["#order-form .pill-row"], title: "Pick a platform",
-      text: trial ? `We picked <strong>${esc(PLATFORMS[trial.s.platform] || trial.s.platform)} ${esc(trial.s.category || "")}</strong> for your free try. You can switch to any platform later.`
+      text: trial ? `We picked <strong>${esc(PLATFORMS[trial.s.platform] || trial.s.platform)} ${esc(trial.s.category || "")}</strong> for your free trial. You can switch to any platform later.`
         : "Choose the platform you want to grow.",
       enter: () => applyTrial(trial) },
     { target: ["#svc-list .svc-option[aria-pressed=\"true\"]", "#svc-list"], title: "Know what you're buying",
@@ -1261,7 +1255,7 @@ async function runWelcomeGuide({ credit, preview, then }) {
     { target: ["#link"], title: "Paste your link",
       text: "Use the public link to your post, video or profile. We never need your password." },
     { target: [".charge-box"], title: "Check the charge",
-      text: trial ? `${num(trial.qty)} ${esc((trial.s.category || "").toLowerCase())} cost <strong>${peso(orderCharge(trial.s.price_per_1k_php, trial.qty))}</strong>${credit ? ", covered by your free credit" : ""}. Tick the box, then Place order.`
+      text: trial ? `Your free trial: ${what} for <strong>₱0.00</strong>. Tick the box, then Place free order.`
         : "The charge updates as you type. Tick the box, then Place order." },
     { target: [`.side-nav [data-nav="recent"]`, `.tabbar [data-nav="more"]`], title: "See it working",
       text: `<strong>Recently completed</strong> shows orders we just delivered for other customers: what, how many and how fast.${matchMedia("(max-width: 760px)").matches ? " Find it under More." : ""}` },
@@ -1269,10 +1263,10 @@ async function runWelcomeGuide({ credit, preview, then }) {
       text: "Follow progress in Orders. If something isn't fully delivered, the undelivered part is refunded to your balance automatically." },
     { target: nav("funds"), title: "Ready for more?",
       text: "Add funds by QR Ph with GCash, Maya or your bank app, from ₱100. Your balance updates within a minute.",
-      next: credit ? "Try my free order" : "Start ordering" },
+      next: trial ? "Try my free order" : "Start ordering" },
   ];
   startTour(steps, {
-    note: preview ? "Preview: this is what new customers see. Nothing is added to your balance." : "",
+    note: preview ? "Preview: this is what new customers see. Nothing is ordered." : "",
     onClose: () => {
       try { localStorage.removeItem("tour"); } catch { /* private mode */ }
       if (route().name === "new") document.getElementById("link")?.scrollIntoView({ block: "center" });
@@ -1311,7 +1305,7 @@ async function runWelcomeGuide({ credit, preview, then }) {
   // tier badge introduction preview: ?badge=member | pro | elite (the tier system itself isn't live yet)
   const badge = new URLSearchParams(location.search).get("badge");
   if (badge && TIERS[badge]) showBadgeIntro(badge, { note: "Preview: how a customer's tier badge is introduced." });
-  else if (preview) runWelcomeGuide({ credit: 7, preview: true });
-  else if (pending) runWelcomeGuide({ credit: Number(pending) || 0, preview: false, then: () => { tierCardGate = true; maybeTierCard(); } });
+  else if (preview) runWelcomeGuide({ preview: true });
+  else if (pending) runWelcomeGuide({ preview: false, then: () => { tierCardGate = true; maybeTierCard(); } });
   else { tierCardGate = true; maybeTierCard(); }
 })();

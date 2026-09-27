@@ -86,7 +86,7 @@ async def main():
     # --- auth
     r = await c.post("/auth/register", json={"email": "Juan@Example.com", "password": "password123"})
     check("register", r.status_code == 200, r.text)
-    check("no welcome credit unless WELCOME_CREDIT_PHP is set", r.json().get("welcome_php") == float(os.environ.get("WELCOME_CREDIT_PHP", "0")), r.text)
+    check("no free credit at sign-up (free trial order instead)", "welcome_php" not in r.json() and "trial" in r.json(), r.text)
     r = await c.post("/auth/register", json={"email": "juan@example.com", "password": "password123"})
     check("duplicate email 409", r.status_code == 409, r.text)
     c2 = httpx.AsyncClient(base_url=API)
@@ -604,6 +604,33 @@ async def main():
     await c3.post("/account/api-key")   # regenerate: the old key stops working
     check("api: regenerating revokes the old key", (await v2(key=key, action="balance")).json() == {"error": "Invalid API key"})
     await c3.aclose()
+
+    # --- free trial order: 1,000 of the cheapest TikTok views, once per account and per link, no balance needed
+    await sql("insert into provider_services (provider_id, provider_service_id, name, category, type, rate, min_qty, max_qty) "
+              "values (1, 9001, 'TikTok Views', 'TikTok Views', 'Default', 0.001, 100, 1000000)")
+    tsid = (await sql("insert into services (provider_id, provider_service_id, platform, category, name, tier) "
+                      "values (1, 9001, 'tiktok', 'Views', 'TikTok Views', 'Basic') returning id"))[0]["id"]
+    cn = httpx.AsyncClient(base_url=API)
+    r = await cn.post("/auth/register", json={"email": "trial@example.com", "password": "password123"})
+    check("trial: offered at sign-up on the cheapest TikTok views", r.json()["trial"] == {"service_id": tsid, "quantity": 1000, "available": True}, r.text)
+    r = await cn.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/1", "quantity": 500})
+    check("trial: other quantities aren't free", r.status_code == 402, r.text)
+    r = await cn.post("/orders", json={"service_id": 1, "link": "https://tiktok.com/@t/video/1", "quantity": 1000})
+    check("trial: other services aren't free", r.status_code == 402, r.text)
+    r = await cn.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/1", "quantity": 1000})
+    check("trial: 1,000 views free with no balance", r.status_code == 200 and r.json()["charge_php"] == 0 and r.json()["free_trial"], r.text)
+    me_t = (await cn.get("/auth/me")).json()
+    check("trial: used up, balance untouched, not counted toward tiers", me_t["trial"]["available"] is False
+          and me_t["balance_php"] == 0 and me_t["tier"]["spent_php"] == 0, me_t)
+    r = await cn.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/2", "quantity": 1000})
+    check("trial: only once per account", r.status_code == 402, r.text)
+    cn2 = httpx.AsyncClient(base_url=API)
+    await cn2.post("/auth/register", json={"email": "trial2@example.com", "password": "password123"})
+    r = await cn2.post("/orders", json={"service_id": tsid, "link": "https://TIKTOK.com/@t/video/1", "quantity": 1000})
+    check("trial: only once per link, even from another account", r.status_code == 400 and "already had a free trial" in r.text, r.text)
+    await sql("update users set trial_used_at = now() where email = 'trial2@example.com'")
+    check("trial: accounts from before the trial don't get it", (await cn2.get("/auth/me")).json()["trial"]["available"] is False)
+    await cn.aclose(); await cn2.aclose()
 
     # --- ledger integrity
     led = await sql("select reason, sum(delta) s, count(*) n from ledger where user_id = :u group by reason order by reason",
