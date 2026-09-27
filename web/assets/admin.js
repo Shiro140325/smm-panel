@@ -1,5 +1,6 @@
 import { api, esc, fmtDate, initTheme, num, peso, PLATFORMS, PLATFORM_ORDER, tierBadge, toast } from "./common.js";
 import { icons } from "./icons.js";
+import { badgeSVG } from "./badges.js";
 
 initTheme(icons);
 document.querySelectorAll("[data-icon]").forEach((el) => (el.innerHTML = icons[el.dataset.icon](18)));
@@ -225,26 +226,28 @@ function renderCustomers() {
   view.innerHTML = `<div class="page-head"><h1>Customers</h1></div>
     <input class="input" id="q" type="search" placeholder="Search by email or ID" style="max-width:360px">
     <div class="card table-card"><div class="table-scroll"><table class="table">
-      <thead><tr><th>ID</th><th>Email</th><th>Joined</th><th class="num">Balance</th><th class="num">Orders</th><th class="num">Topped up</th><th></th></tr></thead>
-      <tbody id="rows"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody></table></div></div>
+      <thead><tr><th>ID</th><th>Email</th><th>Joined</th><th class="num">Balance</th><th class="num">Orders</th><th class="num">Topped up</th><th>Tier</th><th></th></tr></thead>
+      <tbody id="rows"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody></table></div></div>
     <p class="hint">Balance changes are recorded in the ledger with your note, like every other movement of money.</p>`;
   const load = async () => {
     let rows;
     try { rows = await call(`/admin/api/users?limit=100${q ? `&q=${encodeURIComponent(q)}` : ""}`); }
-    catch (e) { $("rows").innerHTML = `<tr><td colspan="7" class="empty">${esc(e.message)}</td></tr>`; return; }
+    catch (e) { $("rows").innerHTML = `<tr><td colspan="8" class="empty">${esc(e.message)}</td></tr>`; return; }
     $("rows").innerHTML = rows.length ? rows.map((u) => `<tr>
       <td class="mono muted">${u.id}</td><td style="font-weight:600">${esc(u.email)}</td>
       <td class="muted" style="white-space:nowrap">${fmtDate(u.created_at)}</td>
       <td class="num"><strong>${peso(u.balance_php)}</strong></td><td class="num">${num(u.orders)}</td>
       <td class="num">${peso(u.topped_up_php)}</td>
+      <td style="white-space:nowrap" title="Website spending after refunds: ${peso(u.spent_php)}">${badgeSVG(u.tier, 18)} ${esc({ member: "Member", pro: "Pro", elite: "Elite" }[u.tier] || u.tier)}
+        <div class="muted" style="font-size:12px">${peso(u.spent_php)} spent</div></td>
       <td><button type="button" class="btn btn-ghost btn-sm" data-adjust="${u.id}" data-email="${esc(u.email)}">Adjust balance</button></td>
     </tr>
-    <tr class="hidden" id="adj-${u.id}"><td colspan="7">
+    <tr class="hidden" id="adj-${u.id}"><td colspan="8">
       <form class="adjust-form" data-user="${u.id}">
         <input class="input" name="amount" type="number" step="0.01" placeholder="Amount, e.g. 50 or -50" required>
         <input class="input" name="note" type="text" maxlength="200" placeholder="Note (why), e.g. goodwill credit for delayed order #12" required>
         <button class="btn btn-primary btn-sm" type="submit">Apply</button>
-      </form></td></tr>`).join("") : `<tr><td colspan="7" class="empty">No customers.</td></tr>`;
+      </form></td></tr>`).join("") : `<tr><td colspan="8" class="empty">No customers.</td></tr>`;
     $("rows").querySelectorAll("[data-adjust]").forEach((b) => b.addEventListener("click", () => {
       $(`adj-${b.dataset.adjust}`).classList.toggle("hidden");
     }));

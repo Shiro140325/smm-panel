@@ -13,7 +13,7 @@ import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from app import announcement, fx
+from app import announcement, fx, tiers
 from app.config import get_settings
 from app.db import DB, get_db
 from app.providers.smm_client import SMMClient
@@ -177,14 +177,19 @@ async def users(q: str | None = None, limit: int = 50, offset: int = 0, db: DB =
     if q:
         where = "(u.email ilike :ql or u.id::text = :q)"
         params.update(q=q.strip().lstrip("#"), ql=f"%{q.strip()}%")
-    return await db.fetch_all(f"""
-        select u.id, u.email, u.created_at,
+    rows = await db.fetch_all(f"""
+        select u.id, u.email, u.created_at, u.tier_max,
                coalesce((select sum(delta) from ledger l where l.user_id = u.id), 0) as balance_php,
                (select count(*) from orders o where o.user_id = u.id) as orders,
-               coalesce((select sum(amount_php) from topups t where t.user_id = u.id and t.status = 'credited'), 0) as topped_up_php
+               coalesce((select sum(amount_php) from topups t where t.user_id = u.id and t.status = 'credited'), 0) as topped_up_php,
+               coalesce((select sum(o.price_php - coalesce((select sum(l.delta) from ledger l
+                                                             where l.reason = 'refund' and l.ref = o.id::text), 0))
+                           from orders o where o.user_id = u.id and o.source = 'web'), 0) as spent_php
           from users u where {where}
          order by u.created_at desc limit :lim offset :off
     """, params)
+    # tier = the higher of what the spending earns now and what was reached before (tiers are kept forever)
+    return [{**r, "tier": tiers.higher(tiers.tier_for_spent(float(r["spent_php"]))["name"], r["tier_max"])} for r in rows]
 
 
 class AdjustIn(BaseModel):

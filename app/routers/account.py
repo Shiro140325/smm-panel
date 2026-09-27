@@ -8,6 +8,7 @@ from app.config import get_settings
 from app.db import DB, get_db
 from app.routers.auth import new_ref_code
 from app.security import current_user
+from app.tiers import current_tier
 
 router = APIRouter(prefix="/account", tags=["account"])
 
@@ -49,7 +50,7 @@ async def affiliate(user: dict = Depends(current_user), db: DB = Depends(get_db)
     return {
         "code": code,
         "link": f"{s.frontend_origin}/?ref={code}",
-        "pct": s.referral_pct,
+        "pct": (await current_tier(db, user["id"]))["referral_pct"],   # 5% Member, 6% Pro, 7% Elite
         "referred": stats["referred"],
         "paying": stats["paying"],
         "earned_php": float(stats["earned_php"]),
@@ -75,3 +76,11 @@ async def new_api_key(user: dict = Depends(current_user), db: DB = Depends(get_d
 async def revoke_api_key(user: dict = Depends(current_user), db: DB = Depends(get_db)):
     await db.execute("update users set api_key_hash = null where id = :u", {"u": user["id"]})
     return {"ok": True}
+
+
+@router.post("/tier-seen")
+async def tier_seen(user: dict = Depends(current_user), db: DB = Depends(get_db)):
+    """The customer closed their tier's introduction card: don't show it again (on any device)."""
+    tier = await current_tier(db, user["id"])
+    await db.execute("update users set tier_seen = :t where id = :u", {"t": tier["name"], "u": user["id"]})
+    return {"seen": tier["name"]}

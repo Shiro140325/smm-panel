@@ -134,7 +134,7 @@ async def _run(p: dict, request: Request):
         if qty <= 0 and not comments:
             raise ApiError("Incorrect quantity")
         res = await place_order(uid, _int(p.get("service"), "service"), link, max(qty, 1),
-                                str(comments).replace("\\n", "\n") if comments else None)
+                                str(comments).replace("\\n", "\n") if comments else None, source="api")
         return {"order": res["id"]}
 
     if action == "status":

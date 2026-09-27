@@ -64,15 +64,23 @@ def terms() -> str:
 <p>You may resell our services through the API. You are responsible for your own customers, and they have no agreement with us. Keep your API key secret. We may limit request rates, and we may revoke a key that is abused.</p>
 
 <h2>7. Referral program</h2>
-<p>When someone creates an account through your referral link, you earn {pct}% of each top-up they complete, added to your wallet balance as credit. Referring yourself or your own other accounts is not allowed. We may withhold or reverse commissions that come from fraud, chargebacks, or abuse, and we may change the rate or end the program; commissions already credited stay yours.</p>
+<p>When someone creates an account through your referral link, you earn {pct}% of each top-up they complete ({float(pct) + 1:g}% as Pro, {float(pct) + 2:g}% as Elite), added to your wallet balance as credit. Referring yourself or your own other accounts is not allowed. We may withhold or reverse commissions that come from fraud, chargebacks, or abuse, and we may change the rate or end the program; commissions already credited stay yours.</p>
 
-<h2>8. Suspension and closing</h2>
+<h2>8. Customer tiers</h2>
+<ul>
+  <li>Every account starts as <strong>Member</strong>. You become <strong>Pro</strong> once you've spent ₱10,000 on orders placed on the website, and <strong>Elite</strong> at ₱25,000. Spending counts what you were charged minus refunds. Orders through the reseller API don't count.</li>
+  <li>Pro gets 3% off and Elite 5% off every order placed on the website, including mass orders. The discount doesn't apply to reseller API orders.</li>
+  <li>Elite also gets a 2% bonus, added to the balance as credit, on each top-up of ₱1,000 or more.</li>
+  <li>Once reached, a tier is yours to keep. We may change the tiers and their benefits in the future; a change never takes away a tier you've already reached, and never changes the price of an order already placed.</li>
+</ul>
+
+<h2>9. Suspension and closing</h2>
 <p>We may suspend or close an account that breaks these terms, is used for fraud, or puts the site or its suppliers at risk. If we close an account for any other reason, we refund its remaining balance. You can close your account at any time by emailing us.</p>
 
-<h2>9. Liability</h2>
+<h2>10. Liability</h2>
 <p>The site and the services are provided as they are. To the extent the law allows, we are not liable for indirect losses, such as lost profits or a platform suspending your account, and our total liability for any claim is limited to the amount you paid for the order it concerns. Nothing in these terms limits rights you have under Philippine consumer law that cannot be waived.</p>
 
-<h2>10. Changes and law</h2>
+<h2>11. Changes and law</h2>
 <p>We may update these terms. The date above shows the latest version, and the version in force when you place an order applies to that order. These terms are governed by the laws of the Republic of the Philippines. We will try to settle any dispute with you directly first; write to {CONTACT}.</p>
 """)
 
@@ -105,7 +113,7 @@ def refund_policy() -> str:
   <li>We close your account for a reason other than a breach of the Terms.</li>
   <li>The law requires it.</li>
 </ul>
-<p>Commission earned through the referral program is credit only and is not paid out as cash.</p>
+<p>Commission earned through the referral program and tier bonuses are credit only and are not paid out as cash.</p>
 
 <h2>Top-up problems</h2>
 <p>If you paid and your balance didn't update within 30 minutes, email {CONTACT} with your account email, the amount and the reference number from your GCash, Maya or bank app. We check every payment against PayMongo's records.</p>

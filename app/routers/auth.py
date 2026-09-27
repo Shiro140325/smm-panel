@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from app.config import get_settings
 from app.db import DB, get_db
 from app.ratelimit import Limiter, client_ip
+from app.tiers import current_tier
 from app.security import (balance_of, clear_session, current_user, hash_password, issue_session,
                           verify_password)
 
@@ -89,4 +90,4 @@ async def logout(response: Response):
 
 @router.get("/me")
 async def me(user: dict = Depends(current_user), db: DB = Depends(get_db)):
-    return {**user, "balance_php": await balance_of(db, user["id"])}
+    return {**user, "balance_php": await balance_of(db, user["id"]), "tier": await current_tier(db, user["id"])}

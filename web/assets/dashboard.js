@@ -2,8 +2,8 @@ import {
   api, esc, fmtDate, initTheme, showAnnouncement, num, orderCharge, peso, PLATFORMS, PLATFORM_ORDER, refillText, enhanceSelect, tierBadge, toast,
 } from "./common.js";
 import { icons } from "./icons.js";
-import { startTour } from "./tour.js";
-import { showBadgeIntro, TIERS } from "./badges.js";
+import { startTour, tourActive } from "./tour.js";
+import { badgeSVG, showBadgeIntro, TIERS } from "./badges.js";
 
 initTheme(icons);
 showAnnouncement();
@@ -56,7 +56,62 @@ async function refreshMe() {
   setBalance(me.balance_php);
   document.getElementById("user-email").textContent = me.email;
   document.getElementById("avatar").textContent = (me.email || "?").slice(0, 1).toUpperCase();
+  paintTier();
+  maybeTierCard();
   return me;
+}
+
+/* ---------------------------------------------------------------- tiers */
+
+const TIER_NAME = { member: "Member", pro: "Pro", elite: "Elite" };
+const tierDiscount = () => state.user?.tier?.discount_pct || 0;
+
+/** Price per 1,000 after the customer's tier discount, rounded up to the centavo (same rule as the server). */
+function myPer1k(per1k) {
+  const d = tierDiscount();
+  return d ? Math.ceil(Number((per1k * (100 - d)).toFixed(6))) / 100 : per1k;
+}
+const myCharge = (per1k, qty) => orderCharge(myPer1k(per1k), qty);
+
+function tierProgress(t) {
+  if (!t.next) return { pct: 100, text: `Top tier · ${t.discount_pct}% off every order` };
+  const prevAt = t.name === "member" ? 0 : { pro: 10000, elite: 25000 }[t.name];
+  const pct = Math.max(0, Math.min(100, ((t.spent_php - prevAt) / (t.next.at_php - prevAt)) * 100));
+  const left = Math.max(0, t.next.at_php - t.spent_php);
+  return { pct, text: `${peso(left).replace(".00", "")} more to ${TIER_NAME[t.next.name]}` };
+}
+
+function paintTier() {
+  const t = state.user?.tier;
+  if (!t) return;
+  const p = tierProgress(t);
+  document.querySelectorAll("[data-tier-chip]").forEach((el) => {
+    el.innerHTML = `<span class="tc-top">${badgeSVG(t.name, 18)}<strong>${TIER_NAME[t.name]}</strong>
+        ${t.discount_pct ? `<span class="tc-off">${t.discount_pct}% off</span>` : ""}</span>
+      <span class="tc-bar"><i style="width:${p.pct.toFixed(1)}%"></i></span>
+      <span class="tc-text">${esc(p.text)}</span>`;
+    el.title = `Your tier: ${TIER_NAME[t.name]}. Tap to see your perks.`;
+  });
+  document.querySelectorAll("[data-tier-top]").forEach((el) => {
+    el.innerHTML = badgeSVG(t.name, 22);
+    el.title = `${TIER_NAME[t.name]} · ${p.text}`;
+  });
+}
+
+document.querySelectorAll("[data-tier-chip], [data-tier-top]").forEach((el) =>
+  el.addEventListener("click", () => { if (state.user?.tier) showBadgeIntro(state.user.tier.name); }));
+
+// The card for a customer's tier shows once per account (remembered on the server): new
+// customers see it right after the welcome guide, existing ones on their next visit, and
+// everyone again when they reach Pro or Elite.
+let tierCardGate = false, tierCardOpen = false;
+async function maybeTierCard() {
+  const t = state.user?.tier;
+  if (!tierCardGate || tierCardOpen || !t || t.seen === t.name || tourActive()) return;
+  tierCardOpen = true;
+  await showBadgeIntro(t.name);
+  try { await api("/account/tier-seen", { method: "POST" }); t.seen = t.name; } catch { /* shown again next visit */ }
+  tierCardOpen = false;
 }
 
 const ROUTES = ["new", "mass", "orders", "funds", "recent", "support", "affiliate", "api", "more"];
@@ -111,12 +166,19 @@ function renderMore() {
     </a>`;
   view.innerHTML = `
     <div class="page-head"><h1>More</h1></div>
+    ${state.user?.tier ? `<button type="button" class="card more-item more-tier" data-more-tier>
+      <span class="more-icon">${badgeSVG(state.user.tier.name, 24)}</span>
+      <span class="grow"><span class="t">${TIER_NAME[state.user.tier.name]}${tierDiscount() ? ` · ${tierDiscount()}% off every order` : ""}</span>
+        <span class="tc-bar more-bar"><i style="width:${tierProgress(state.user.tier).pct.toFixed(1)}%"></i></span>
+        <span class="s">${esc(tierProgress(state.user.tier).text)}</span></span>
+    </button>` : ""}
     <div class="more-list">
       ${item("#recent", "done", "Recently completed", "Orders just delivered for other customers")}
       ${item("#affiliate", "gift", "Affiliate", "Earn credit when friends top up")}
       ${item("#api", "code", "API", "Resell our services from your own panel")}
       ${item("#support", "chat", "Support", "support@smmshiro.com")}
     </div>`;
+  view.querySelector("[data-more-tier]")?.addEventListener("click", () => showBadgeIntro(state.user.tier.name));
 }
 
 async function copy(text, done) {
@@ -412,7 +474,7 @@ function validate(svc) {
   if (qty < svc.min) return `Minimum is ${num(svc.min)}`;
   if (qty > svc.max) return `Maximum is ${num(svc.max)}`;
   if (!/^https?:\/\/\S+$/i.test(state.link.trim())) return "Paste a link that starts with https://";
-  const charge = orderCharge(svc.price_per_1k_php, qty);
+  const charge = myCharge(svc.price_per_1k_php, qty);
   if (state.user && charge > state.user.balance_php) return "low-balance";
   if (!state.ack) return "Tick the box to confirm";
   return null;
@@ -421,11 +483,13 @@ function validate(svc) {
 function updateCharge() {
   const svc = selectedService();
   const qty = orderQty(svc);
-  const charge = svc ? orderCharge(svc.price_per_1k_php, qty) : 0;
+  const charge = svc ? myCharge(svc.price_per_1k_php, qty) : 0;
   const problem = validate(svc);
   const chargeEl = document.getElementById("charge");
   if (!chargeEl) return;
   chargeEl.textContent = peso(charge);
+  const note = document.getElementById("charge-note");
+  if (note) note.textContent = tierDiscount() && charge ? `Includes your ${TIER_NAME[state.user.tier.name]} discount (${tierDiscount()}% off)` : "";
   document.getElementById("qty-count").textContent = svc?.custom_comments
     ? `${num(qty)} comment${qty === 1 ? "" : "s"} · min ${num(svc.min)}, max ${num(svc.max)}`
     : svc ? `Min ${num(svc.min)} · Max ${num(svc.max)}` : "";
@@ -522,7 +586,7 @@ function renderNew() {
           <span class="hint" id="qty-count"></span>
         </div>`}
         <div class="charge-box">
-          <div style="flex:1"><div class="k">Charge</div><div class="v" id="charge">₱0.00</div></div>
+          <div style="flex:1"><div class="k">Charge</div><div class="v" id="charge">₱0.00</div><div class="k" id="charge-note"></div></div>
           <div id="charge-msg"></div>
         </div>
         <label class="check"><input type="checkbox" id="ack" ${state.ack ? "checked" : ""}>
@@ -636,7 +700,7 @@ function parseMass(text) {
     else if (!/^https?:\/\/\S+$/i.test(link)) r.error = "Link must start with https://";
     else if (!/^\d+$/.test(qty.replace(/,/g, "")) || q <= 0) r.error = "Quantity must be a whole number";
     else if (q < r.svc.min || q > r.svc.max) r.error = `Quantity must be ${num(r.svc.min)}–${num(r.svc.max)}`;
-    else r.charge = orderCharge(r.svc.price_per_1k_php, q);
+    else r.charge = myCharge(r.svc.price_per_1k_php, q);
     rows.push(r);
   });
   return rows;
@@ -1131,7 +1195,7 @@ function applyTrial(trial) {
   else renderNew();
 }
 
-async function runWelcomeGuide({ credit, preview }) {
+async function runWelcomeGuide({ credit, preview, then }) {
   await servicesLoad;
   const trial = pickTrial(credit || 7);
   const creditText = credit ? peso(credit) : "";
@@ -1174,6 +1238,7 @@ async function runWelcomeGuide({ credit, preview }) {
     onClose: () => {
       try { localStorage.removeItem("tour"); } catch { /* private mode */ }
       if (route().name === "new") document.getElementById("link")?.scrollIntoView({ block: "center" });
+      then?.();
     },
   });
 }
@@ -1206,5 +1271,6 @@ async function runWelcomeGuide({ credit, preview }) {
   const badge = new URLSearchParams(location.search).get("badge");
   if (badge && TIERS[badge]) showBadgeIntro(badge, { note: "Preview: how a customer's tier badge is introduced." });
   else if (preview) runWelcomeGuide({ credit: 7, preview: true });
-  else if (pending) runWelcomeGuide({ credit: Number(pending) || 0, preview: false });
+  else if (pending) runWelcomeGuide({ credit: Number(pending) || 0, preview: false, then: () => { tierCardGate = true; maybeTierCard(); } });
+  else { tierCardGate = true; maybeTierCard(); }
 })();

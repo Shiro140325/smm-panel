@@ -782,9 +782,9 @@ a.pill { text-decoration: none; }
 .bi-card .tour-note { align-self: stretch; margin-bottom: 4px; }
 .bi-stage { position: relative; width: 150px; height: 150px; display: grid; place-items: center; margin: 6px 0 8px; }
 .bi-badge { width: 118px; height: 118px; position: relative; z-index: 1; animation: bi-settle .5s ease 1.3s both; }
-.bi-outline { stroke-dasharray: 1; stroke-dashoffset: 1;
+.bi .bi-outline { stroke-dasharray: 1; stroke-dashoffset: 1;
   animation: bi-draw .8s cubic-bezier(.65, 0, .35, 1) .25s forwards, bi-solid 1ms linear 1.06s forwards; }   /* then a plain line: no seam where it started */
-.bi-mark { transform-box: fill-box; transform-origin: center; opacity: 0; }
+.bi .bi-mark { transform-box: fill-box; transform-origin: center; opacity: 0; }
 .bi-member .bi-mark { animation: bi-rise .5s cubic-bezier(.2, .9, .25, 1.4) .95s forwards; }
 .bi-pro .bi-mark { animation: bi-gem .55s cubic-bezier(.2, .9, .25, 1.4) .95s forwards; }
 .bi-elite .bi-mark { animation: bi-star .75s cubic-bezier(.2, .9, .25, 1.2) .95s forwards; }
@@ -828,3 +828,25 @@ a.pill { text-decoration: none; }
   .bi *, .bi { animation-duration: 1ms !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; }
   .bi-sparks { display: none; }
 }
+
+/* Tier chip (sidebar balance card) and badge (phone top bar) */
+.tier-chip { margin-top: 12px; width: 100%; display: flex; flex-direction: column; gap: 7px; padding: 10px 12px; border-radius: 12px;
+  background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .12); color: #fff; text-align: left; cursor: pointer; font: inherit; }
+.tier-chip:hover { background: rgba(255, 255, 255, .1); }
+.tier-chip:empty { display: none; }
+.tc-top { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.tc-off { margin-left: auto; font-size: 12px; font-weight: 700; background: #fff; color: #0B0B0B; border-radius: 999px; padding: 1px 8px; }
+.tc-bar { height: 4px; border-radius: 99px; background: rgba(255, 255, 255, .16); overflow: hidden; }
+.tc-bar i { display: block; height: 100%; background: #fff; border-radius: inherit; }
+.tc-text { font-size: 12px; color: #B9BCC4; }
+.tier-top { display: none; }
+@media (max-width: 760px) {
+  .tier-top { display: grid; place-items: center; width: 34px; height: 34px; border: 0; border-radius: 10px; background: transparent; color: #fff; cursor: pointer; padding: 0; }
+  .tier-top:empty { display: none; }
+  .topbar .tier-top + .bal { margin-left: -4px; }
+}
+#charge-note { margin-top: 2px; }
+.more-tier { width: 100%; margin-bottom: 10px; border: 1px solid var(--line); background: var(--surface); font: inherit; text-align: left; cursor: pointer; }
+.more-tier .grow { gap: 6px; }
+.more-bar { background: var(--line); display: block; }
+.more-bar i { background: var(--ink); }

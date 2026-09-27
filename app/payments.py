@@ -14,6 +14,7 @@ import uuid
 import httpx
 
 from app.config import get_settings
+from app.tiers import TOPUP_BONUS_MIN, current_tier
 from app.db import transaction
 
 log = logging.getLogger("payments")
@@ -32,6 +33,28 @@ def _paid(payments: list) -> tuple[int, str | None]:
         total += int(a.get("amount") or 0)
         source = source or (a.get("source") or {}).get("type")
     return total // 100, source
+
+
+async def _topup_extras(db, user_id: int, amount: int, topup_id: str) -> None:
+    """After a top-up is credited: the referrer's commission (rate by the referrer's tier) and the
+    Elite top-up bonus. Each at most once per top-up (unique indexes on ledger.ref)."""
+    if get_settings().referral_pct > 0:
+        referrer = await db.fetch_val("select referred_by from users where id = :u and referred_by <> id", {"u": user_id})
+        if referrer:
+            pct = (await current_tier(db, referrer))["referral_pct"]
+            commission = round(amount * pct / 100, 2)
+            if commission > 0:
+                await db.execute("""
+                    insert into ledger (user_id, delta, reason, ref) values (:u, :d, 'referral', :id)
+                    on conflict do nothing
+                """, {"u": referrer, "d": commission, "id": topup_id})
+    if amount >= TOPUP_BONUS_MIN:
+        bonus_pct = (await current_tier(db, user_id))["topup_bonus_pct"]
+        if bonus_pct:
+            await db.execute("""
+                insert into ledger (user_id, delta, reason, ref) values (:u, :d, 'tier_bonus', :id)
+                on conflict do nothing
+            """, {"u": user_id, "d": round(amount * bonus_pct / 100, 2), "id": topup_id})
 
 
 async def credit_topup(topup_id: str, paid_php: int, source: str | None) -> bool:
@@ -53,17 +76,8 @@ async def credit_topup(topup_id: str, paid_php: int, source: str | None) -> bool
             on conflict do nothing
             returning user_id
         """, {"id": topup_id, "amt": paid_php, "src": str(source)[:20] if source else None})
-        pct = get_settings().referral_pct
-        if row and pct > 0:
-            # referral commission: credit to whoever referred this customer, once per top-up
-            await db.execute("""
-                insert into ledger (user_id, delta, reason, ref)
-                select u.referred_by, round(CAST(:amt AS numeric) * CAST(:pct AS numeric) / 100, 2), 'referral', :id
-                  from users u
-                 where u.id = :u and u.referred_by is not null and u.referred_by <> u.id
-                   and round(CAST(:amt AS numeric) * CAST(:pct AS numeric) / 100, 2) > 0
-                on conflict do nothing
-            """, {"u": row["user_id"], "amt": paid_php, "pct": pct, "id": topup_id})
+        if row:
+            await _topup_extras(db, row["user_id"], paid_php, topup_id)
     if row:
         log.info("topup %s credited ₱%s (%s)", topup_id, paid_php, source)
     return bool(row)

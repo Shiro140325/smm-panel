@@ -10,6 +10,7 @@ from app.db import transaction
 from app.pricing import SERVICE_SELECT, order_price_php, price_per_1k_php
 from app.providers.smm_client import ProviderError, SMMClient
 from app.security import balance_of, current_user
+from app.tiers import current_tier, discounted_per_1k
 from app.workers.sync import sync_user_orders
 
 log = logging.getLogger("orders")
@@ -45,8 +46,10 @@ async def create_order(body: OrderIn, user: dict = Depends(current_user)):
     return await place_order(user["id"], body.service_id, body.link, body.quantity, body.comments)
 
 
-async def place_order(user_id: int, service_id: int, link: str, quantity: int, comments_text: str | None = None) -> dict:
-    """Validate, charge and place one order. Raises HTTPException with a customer-facing message."""
+async def place_order(user_id: int, service_id: int, link: str, quantity: int, comments_text: str | None = None,
+                      source: str = "web") -> dict:
+    """Validate, charge and place one order. Raises HTTPException with a customer-facing message.
+    Website orders (source "web") get the customer's tier discount; reseller API orders don't."""
     # 1) validate, price, debit balance, record order — one transaction, user row locked
     async with transaction() as db:
         svc = await db.fetch_one(SERVICE_SELECT + " and s.id = :id", {"id": service_id})
@@ -64,6 +67,8 @@ async def place_order(user_id: int, service_id: int, link: str, quantity: int, c
             raise HTTPException(400, f"Quantity must be between {svc['min_qty']} and {svc['max_qty']}")
 
         per_1k = price_per_1k_php(svc["rate"], svc["currency"], svc["markup_pct"], svc["price_php"])
+        if source == "web":
+            per_1k = discounted_per_1k(per_1k, (await current_tier(db, user_id))["discount_pct"])
         price = order_price_php(per_1k, quantity)
 
         await db.execute("select id from users where id = :u for update", {"u": user_id})
@@ -71,10 +76,10 @@ async def place_order(user_id: int, service_id: int, link: str, quantity: int, c
             raise HTTPException(402, "Not enough balance")
 
         order = await db.fetch_one("""
-            insert into orders (user_id, service_id, provider_id, link, quantity, price_php, comments)
-            values (:u, :s, :p, :l, :q, :price, :c) returning id
+            insert into orders (user_id, service_id, provider_id, link, quantity, price_php, comments, source)
+            values (:u, :s, :p, :l, :q, :price, :c, :src) returning id
         """, {"u": user_id, "s": svc["id"], "p": svc["provider_id"], "l": link,
-              "q": quantity, "price": price, "c": comments})
+              "q": quantity, "price": price, "c": comments, "src": source})
         await db.execute(
             "insert into ledger (user_id, delta, reason, ref) values (:u, :d, 'order', :r)",
             {"u": user_id, "d": -price, "r": str(order["id"])},
@@ -156,6 +161,7 @@ async def mass_order(body: MassIn, user: dict = Depends(current_user)):
             SERVICE_SELECT + " and s.id = ANY(CAST(:ids AS int[]))",
             {"ids": sorted({r["service_id"] for r in rows}) or [0]})}
         balance = await balance_of(db, user["id"])
+        discount = (await current_tier(db, user["id"]))["discount_pct"]
     total = 0.0
     for r in rows:
         svc = svcs.get(r["service_id"])
@@ -165,7 +171,8 @@ async def mass_order(body: MassIn, user: dict = Depends(current_user)):
             errors.append({"line": r["line"], "error": "Custom comments can't be mass ordered. Use New order"}); continue
         if not svc["min_qty"] <= r["quantity"] <= svc["max_qty"]:
             errors.append({"line": r["line"], "error": f"Quantity must be between {svc['min_qty']:,} and {svc['max_qty']:,}"}); continue
-        total += order_price_php(price_per_1k_php(svc["rate"], svc["currency"], svc["markup_pct"], svc["price_php"]), r["quantity"])
+        total += order_price_php(discounted_per_1k(
+            price_per_1k_php(svc["rate"], svc["currency"], svc["markup_pct"], svc["price_php"]), discount), r["quantity"])
     if errors:
         errors.sort(key=lambda e: e["line"])
         shown = "; ".join(f"Line {e['line']}: {e['error']}" for e in errors[:5])

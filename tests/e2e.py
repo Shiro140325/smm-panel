@@ -421,6 +421,65 @@ async def main():
     await ca.post("/admin/api/services/1/hidden", json={"hidden": False})
     check("admin: showing it again", 1 in [x["id"] for x in (await c.get("/services")).json()])
 
+    # --- customer tiers: Member → Pro (₱10k) → Elite (₱25k), website spending after refunds, kept forever
+    ct = httpx.AsyncClient(base_url=API)
+    tu = (await ct.post("/auth/register", json={"email": "tier@example.com", "password": "password123"})).json()["id"]
+    await sql("insert into ledger (user_id, delta, reason, ref) values (:u, 50000, 'adjustment', 'test')", {"u": tu})
+    t = (await ct.get("/auth/me")).json()["tier"]
+    check("tier: new account is Member, card not seen yet", t["name"] == "member" and t["seen"] is None
+          and t["discount_pct"] == 0 and t["next"] == {"name": "pro", "at_php": 10000}, t)
+    await sql("""insert into orders (user_id, service_id, provider_id, link, quantity, price_php, status, source)
+                 values (:u, 2, 1, 'https://t/a', 1000, 9950, 'completed', 'web'),
+                        (:u, 2, 1, 'https://t/api', 1000, 90000, 'completed', 'api')""", {"u": tu})
+    t = (await ct.get("/auth/me")).json()["tier"]
+    check("tier: API orders don't count toward the tier", t["name"] == "member" and t["spent_php"] == 9950, t)
+    r = await ct.post("/orders", json={"service_id": 2, "link": "https://tiktok.com/@t", "quantity": 1000})
+    check("tier: Member pays full price", r.json().get("charge_php") == 111.36, r.text)
+    t = (await ct.get("/auth/me")).json()["tier"]
+    check("tier: reaching ₱10,000 makes Pro (3% off, 6% referral)", t["name"] == "pro" and t["discount_pct"] == 3
+          and t["referral_pct"] == 6 and t["next"]["name"] == "elite", t)
+    r = await ct.post("/orders", json={"service_id": 2, "link": "https://tiktok.com/@t", "quantity": 1000})
+    check("tier: Pro website order charged 3% less (₱111.36 → ₱108.02)", r.json().get("charge_php") == 108.02, r.text)
+    r = await ct.post("/orders/mass", json={"orders": "2|https://tiktok.com/@m1|1000\n2|https://tiktok.com/@m2|1000"})
+    check("tier: mass orders get the discount too", r.json().get("charged_php") == 216.04, r.text)
+    key = (await ct.post("/account/api-key")).json()["key"]
+    r = await ct.post("/api/v2", data={"key": key, "action": "add", "service": 2, "link": "https://tiktok.com/@api", "quantity": 1000})
+    api_price = await sql("select price_php, source from orders where id = :i", {"i": r.json().get("order")})
+    check("tier: reseller API orders get no discount", float(api_price[0]["price_php"]) == 111.36 and api_price[0]["source"] == "api", api_price)
+    check("tier: card for the new tier not seen yet", (await ct.get("/auth/me")).json()["tier"]["seen"] is None)
+    r = await ct.post("/account/tier-seen")
+    check("tier: closing the card is remembered", r.json() == {"seen": "pro"} and (await ct.get("/auth/me")).json()["tier"]["seen"] == "pro", r.text)
+    await sql("insert into ledger (user_id, delta, reason, ref) select :u, price_php, 'refund', id::text from orders where user_id = :u and price_php = 9950", {"u": tu})
+    t = (await ct.get("/auth/me")).json()["tier"]
+    check("tier: kept forever even if refunds bring spending back under", t["name"] == "pro" and t["spent_php"] < 10000, t)
+    users = (await ca.get("/admin/api/users", params={"q": "tier@example.com"})).json()
+    check("tier: shown in the control panel", users and users[0]["tier"] == "pro", users)
+    await sql("""insert into orders (user_id, service_id, provider_id, link, quantity, price_php, status, source)
+                 values (:u, 2, 1, 'https://t/b', 1000, 30000, 'completed', 'web')""", {"u": tu})
+    t = (await ct.get("/auth/me")).json()["tier"]
+    check("tier: ₱25,000 makes Elite (5% off, 7% referral, +2% top-up bonus)", t["name"] == "elite" and t["discount_pct"] == 5
+          and t["referral_pct"] == 7 and t["topup_bonus_pct"] == 2 and t["next"] is None and t["seen"] == "pro", t)
+    bal0 = (await ct.get("/auth/me")).json()["balance_php"]
+    for amount in (1000, 999):
+        tid = str(uuid.uuid4())
+        await sql("insert into topups (id, user_id, amount_php, method) values (CAST(:id AS uuid), :u, :a, 'paymongo')", {"id": tid, "u": tu, "a": amount})
+        raw, hdr = signed(paid_event(tid, amount))
+        await c.post("/webhooks/paymongo", content=raw, headers=hdr)
+        await c.post("/webhooks/paymongo", content=raw, headers=hdr)   # replay
+    bal1 = (await ct.get("/auth/me")).json()["balance_php"]
+    check("tier: Elite +2% bonus on a ₱1,000 top-up only, once", round(bal1 - bal0, 2) == 1000 + 20 + 999, (bal0, bal1))
+    code = (await ct.get("/account/affiliate")).json()
+    check("tier: affiliate page shows the tier's rate", code["pct"] == 7, code)
+    cf = httpx.AsyncClient(base_url=API)
+    fid2 = (await cf.post("/auth/register", json={"email": "friend2@example.com", "password": "password123", "ref": code["code"]})).json()["id"]
+    tid = str(uuid.uuid4())
+    await sql("insert into topups (id, user_id, amount_php, method) values (CAST(:id AS uuid), :u, 500, 'paymongo')", {"id": tid, "u": fid2})
+    raw, hdr = signed(paid_event(tid, 500))
+    await c.post("/webhooks/paymongo", content=raw, headers=hdr)
+    com = await sql("select delta from ledger where reason = 'referral' and ref = :r", {"r": tid})
+    check("tier: an Elite referrer earns 7%", com and float(com[0]["delta"]) == 35, com)
+    await ct.aclose(); await cf.aclose()
+
     # --- announcement bar
     check("announcement: none by default", (await c.get("/announcement")).json()["text"] == "")
     r = await ca.put("/admin/api/announcement", json={"text": "  New:  ₱15 free credit\n on sign-up!  "})

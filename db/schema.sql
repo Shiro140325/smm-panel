@@ -12,6 +12,8 @@ create unique index if not exists users_email_lower on users (lower(email));
 alter table users add column if not exists api_key_hash text;                  -- sha256 of the reseller API key
 alter table users add column if not exists ref_code text;                      -- this user's referral code
 alter table users add column if not exists referred_by bigint references users(id);
+alter table users add column if not exists tier_max text;    -- highest tier reached (tiers are kept forever)
+alter table users add column if not exists tier_seen text;   -- tier whose introduction card the customer has seen
 create unique index if not exists users_api_key on users (api_key_hash) where api_key_hash is not null;
 create unique index if not exists users_ref_code on users (ref_code) where ref_code is not null;
 create index if not exists users_referred_by on users (referred_by) where referred_by is not null;
@@ -21,7 +23,7 @@ create table if not exists ledger (
   id         bigserial primary key,
   user_id    bigint not null references users(id),
   delta      numeric(12,2) not null,
-  reason     text not null,            -- topup | order | refund | adjustment | referral | welcome
+  reason     text not null,            -- topup | order | refund | adjustment | referral | welcome | tier_bonus
   ref        text,                     -- topup id / order id (referral: the referred customer's topup id)
   created_at timestamptz not null default now()
 );
@@ -29,6 +31,7 @@ create index if not exists ledger_user on ledger (user_id);
 -- one refund per order, one credit per top-up
 create unique index if not exists ledger_unique_ref on ledger (reason, ref) where reason in ('topup', 'refund');
 create unique index if not exists ledger_unique_referral on ledger (ref) where reason = 'referral';   -- one commission per top-up
+create unique index if not exists ledger_unique_tier_bonus on ledger (ref) where reason = 'tier_bonus';   -- one Elite bonus per top-up
 
 create table if not exists topups (
   id           uuid primary key,
@@ -123,6 +126,7 @@ create table if not exists orders (
 );
 alter table orders add column if not exists comments text;   -- for databases created before this column
 alter table orders add column if not exists cancel_requested_at timestamptz;
+alter table orders add column if not exists source text not null default 'web';   -- web | api (API orders don't count toward tiers)
 create index if not exists orders_user on orders (user_id, created_at desc);
 create index if not exists orders_sync on orders (provider_id, status);
 create index if not exists orders_completed_by_service on orders (service_id, completed_at desc) where status = 'completed';   -- service timing
