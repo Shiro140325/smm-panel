@@ -14,8 +14,8 @@ def fx_to_php(currency: str) -> float:
 
 # Tiered markup for services without a fixed markup_pct: cheap services need a bigger
 # percentage to be worth selling at all, expensive ones a smaller one to stay competitive.
-MARKUP_BANDS = [(0.05, 300.0), (0.50, 150.0)]   # (USD per 1K below, markup %)
-MARKUP_DEFAULT = 60.0
+MARKUP_BANDS = [(0.05, 250.0), (0.50, 120.0)]   # (USD per 1K below, markup %)
+MARKUP_DEFAULT = 50.0
 
 
 def tiered_markup(rate_usd: float) -> float:

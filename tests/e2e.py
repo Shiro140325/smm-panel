@@ -59,8 +59,8 @@ async def main():
           == [("tiktok", "Followers", "Basic", 0), ("tiktok", "Followers", "HQ", 30), ("instagram", "Comments", "Basic", 0)]
           and all(a["markup_pct"] is None and a["active"] for a in auto), auto)
     r = httpx.get(f"{API}/services")
-    # tiered markup: $0.50 → 60% (not under $0.50), $1.20 → 60%, $1.00 → 60%
-    check("auto services priced with tiered markup", sorted(s["price_per_1k_php"] for s in r.json()) == [46.4, 92.8, 111.36], r.text)
+    # tiered markup: $0.50 → 50% (not under $0.50), $1.20 → 50%, $1.00 → 50%
+    check("auto services priced with tiered markup", sorted(s["price_per_1k_php"] for s in r.json()) == [43.5, 87.0, 104.4], r.text)
     check("featured list excludes auto rows", httpx.get(f"{API}/services?featured=1").json() == [])
     # the rest of this test uses hand-picked services with ids 1..3
     await sql("delete from services where auto")

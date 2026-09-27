@@ -1132,7 +1132,7 @@ function applyTrial(trial) {
 
 async function runWelcomeGuide({ credit, preview }) {
   await servicesLoad;
-  const trial = pickTrial(credit || 15);
+  const trial = pickTrial(credit || 7);
   const creditText = credit ? peso(credit) : "";
   const onPage = (hash) => () => new Promise((r) => {
     if (location.hash === hash) return r();
@@ -1201,6 +1201,6 @@ async function runWelcomeGuide({ credit, preview }) {
   let pending = null;
   try { pending = localStorage.getItem("tour"); } catch { /* private mode */ }
   const preview = new URLSearchParams(location.search).get("tour") === "preview";
-  if (preview) runWelcomeGuide({ credit: 15, preview: true });
+  if (preview) runWelcomeGuide({ credit: 7, preview: true });
   else if (pending) runWelcomeGuide({ credit: Number(pending) || 0, preview: false });
 })();
