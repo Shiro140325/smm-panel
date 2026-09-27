@@ -850,3 +850,17 @@ a.pill { text-decoration: none; }
 .more-tier .grow { gap: 6px; }
 .more-bar { background: var(--line); display: block; }
 .more-bar i { background: var(--ink); }
+
+/* Sidebar on short screens (iPad landscape is ~690px tall): never squeeze its parts (the balance card
+   clips its content), scroll instead, and tighten the spacing so it usually fits. */
+.sidebar > * { flex-shrink: 0; }
+.sidebar { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+.sidebar::-webkit-scrollbar { display: none; }
+@media (max-height: 820px) {
+  .sidebar { gap: 14px; padding-top: 16px; padding-bottom: 14px; }
+  .sidebar .brand img { height: 42px; }
+  .balance-card { padding: 12px 14px; gap: 8px; }
+  .balance-card .v { font-size: 24px; }
+  .side-nav a { padding: 8px 12px; }
+  .tier-chip { margin-top: 6px; padding: 8px 10px; gap: 5px; }
+}
