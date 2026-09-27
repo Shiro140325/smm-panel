@@ -15,6 +15,10 @@ alter table users add column if not exists referred_by bigint references users(i
 alter table users add column if not exists tier_max text;    -- highest tier reached (tiers are kept forever)
 alter table users add column if not exists tier_seen text;   -- tier whose introduction card the customer has seen
 alter table users add column if not exists trial_used_at timestamptz;   -- free trial order used (set for accounts from before the trial)
+alter table users add column if not exists trial_device text;   -- browser device id the trial was used from
+alter table users add column if not exists trial_ip text;       -- network (IP) the trial was used from
+create index if not exists users_trial_device on users (trial_device) where trial_device is not null;
+create index if not exists users_trial_ip on users (trial_ip) where trial_ip is not null;
 create unique index if not exists users_api_key on users (api_key_hash) where api_key_hash is not null;
 create unique index if not exists users_ref_code on users (ref_code) where ref_code is not null;
 create index if not exists users_referred_by on users (referred_by) where referred_by is not null;

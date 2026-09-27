@@ -610,7 +610,9 @@ async def main():
               "values (1, 9001, 'TikTok Views', 'TikTok Views', 'Default', 0.001, 100, 1000000)")
     tsid = (await sql("insert into services (provider_id, provider_service_id, platform, category, name, tier) "
                       "values (1, 9001, 'tiktok', 'Views', 'TikTok Views', 'Basic') returning id"))[0]["id"]
-    cn = httpx.AsyncClient(base_url=API)
+    def dev_client(dev, ip):
+        return httpx.AsyncClient(base_url=API, headers={"X-Device": dev * 32, "cf-connecting-ip": ip})
+    cn = dev_client("a", "10.9.0.1")
     r = await cn.post("/auth/register", json={"email": "trial@example.com", "password": "password123"})
     check("trial: offered at sign-up on the cheapest TikTok views", r.json()["trial"] == {"service_id": tsid, "quantity": 1000, "available": True}, r.text)
     r = await cn.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/1", "quantity": 500})
@@ -624,13 +626,30 @@ async def main():
           and me_t["balance_php"] == 0 and me_t["tier"]["spent_php"] == 0, me_t)
     r = await cn.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/2", "quantity": 1000})
     check("trial: only once per account", r.status_code == 402, r.text)
-    cn2 = httpx.AsyncClient(base_url=API)
+    cn2 = dev_client("b", "10.9.0.2")
     await cn2.post("/auth/register", json={"email": "trial2@example.com", "password": "password123"})
     r = await cn2.post("/orders", json={"service_id": tsid, "link": "https://TIKTOK.com/@t/video/1", "quantity": 1000})
     check("trial: only once per link, even from another account", r.status_code == 400 and "already had a free trial" in r.text, r.text)
     await sql("update users set trial_used_at = now() where email = 'trial2@example.com'")
     check("trial: accounts from before the trial don't get it", (await cn2.get("/auth/me")).json()["trial"]["available"] is False)
-    await cn.aclose(); await cn2.aclose()
+    cn3 = dev_client("a", "10.9.0.3")   # same device, new account and network
+    r = await cn3.post("/auth/register", json={"email": "trial3@example.com", "password": "password123"})
+    check("trial: one per device, even on a new account", r.json()["trial"]["available"] is False, r.text)
+    r = await cn3.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/3", "quantity": 1000})
+    check("trial: same device can't order it free", r.status_code == 402, r.text)
+    cn4 = dev_client("c", "10.9.0.1")   # new device, same network within 30 days
+    r = await cn4.post("/auth/register", json={"email": "trial4@example.com", "password": "password123"})
+    check("trial: one per network for 30 days", r.json()["trial"]["available"] is False, r.text)
+    cn5 = dev_client("d", "10.9.0.5")
+    r = await cn5.post("/auth/register", json={"email": "trial5@example.com", "password": "password123"})
+    check("trial: a new device on a new network still gets it", r.json()["trial"]["available"] is True, r.text)
+    r = await cn5.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/5", "quantity": 1000})
+    check("trial: device and network recorded", r.status_code == 200 and (await sql(
+        "select trial_device, trial_ip from users where email = 'trial5@example.com'"))[0] == {"trial_device": "d" * 32, "trial_ip": "10.9.0.5"}, r.text)
+    await sql("update users set trial_used_at = now() - interval '31 days' where email = 'trial@example.com'")
+    r = await dev_client("e", "10.9.0.1").post("/auth/register", json={"email": "trial6@example.com", "password": "password123"})
+    check("trial: network block expires after 30 days", r.json()["trial"]["available"] is True, r.text)
+    for x in (cn, cn2, cn3, cn4, cn5): await x.aclose()
 
     # --- ledger integrity
     led = await sql("select reason, sum(delta) s, count(*) n from ledger where user_id = :u group by reason order by reason",

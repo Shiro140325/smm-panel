@@ -18,13 +18,29 @@ export class ApiError extends Error {
   constructor(message, status) { super(message); this.status = status; }
 }
 
+/** A random id for this browser, kept in storage and a long-lived cookie (used to allow one free trial per device). */
+export function deviceId() {
+  const ok = (v) => (/^[a-f0-9]{32}$/.test(v || "") ? v : "");
+  let id = "";
+  try { id = ok(localStorage.getItem("dev")); } catch { /* private mode */ }
+  if (!id) id = ok((document.cookie.match(/(?:^|; )dev=([a-f0-9]{32})/) || [])[1]);
+  if (!id) {
+    const b = new Uint8Array(16);
+    crypto.getRandomValues(b);
+    id = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+  }
+  try { localStorage.setItem("dev", id); } catch { /* private mode */ }
+  document.cookie = `dev=${id}; path=/; max-age=${60 * 60 * 24 * 730}; samesite=lax${location.protocol === "https:" ? "; secure" : ""}`;
+  return id;
+}
+
 export async function api(path, { method = "GET", body } = {}) {
   let res;
   try {
     res = await fetch(API_BASE + path, {
       method,
       credentials: "include",
-      headers: body ? { "Content-Type": "application/json" } : {},
+      headers: { ...(body ? { "Content-Type": "application/json" } : {}), "X-Device": deviceId() },
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch {

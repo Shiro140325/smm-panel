@@ -3,7 +3,7 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
 from app.db import transaction
@@ -11,7 +11,8 @@ from app.pricing import SERVICE_SELECT, order_price_php, price_per_1k_php
 from app.providers.smm_client import ProviderError, SMMClient
 from app.security import balance_of, current_user
 from app.tiers import current_tier, discounted_per_1k
-from app.trial import TRIAL_QTY, trial_for
+from app.ratelimit import client_ip
+from app.trial import TRIAL_QTY, device_of, trial_for
 from app.workers.sync import sync_user_orders
 
 log = logging.getLogger("orders")
@@ -43,12 +44,13 @@ def _is_custom(svc: dict) -> bool:
 
 
 @router.post("")
-async def create_order(body: OrderIn, user: dict = Depends(current_user)):
-    return await place_order(user["id"], body.service_id, body.link, body.quantity, body.comments)
+async def create_order(body: OrderIn, request: Request, user: dict = Depends(current_user)):
+    return await place_order(user["id"], body.service_id, body.link, body.quantity, body.comments,
+                             trial_ctx={"device": device_of(request), "ip": client_ip(request)})
 
 
 async def place_order(user_id: int, service_id: int, link: str, quantity: int, comments_text: str | None = None,
-                      source: str = "web") -> dict:
+                      source: str = "web", trial_ctx: dict | None = None) -> dict:
     """Validate, charge and place one order. Raises HTTPException with a customer-facing message.
     Website orders (source "web") get the customer's tier discount; reseller API orders don't."""
     # 1) validate, price, debit balance, record order — one transaction, user row locked
@@ -74,13 +76,14 @@ async def place_order(user_id: int, service_id: int, link: str, quantity: int, c
 
         await db.execute("select id from users where id = :u for update", {"u": user_id})
         # the free trial: this account's first order of the trial service at exactly the trial quantity
-        if source == "web" and quantity == TRIAL_QTY:
-            t = await trial_for(db, user_id)
+        if source == "web" and quantity == TRIAL_QTY and trial_ctx is not None:   # single website orders only
+            t = await trial_for(db, user_id, trial_ctx["device"], trial_ctx["ip"])
             if t["available"] and svc["id"] == t["service_id"]:
                 if await db.fetch_val("select 1 from orders where source = 'trial' and lower(link) = lower(:l) limit 1",
                                       {"l": link}):
                     raise HTTPException(400, "This link already had a free trial. Use your free trial on a different post or video.")
-                await db.execute("update users set trial_used_at = now() where id = :u", {"u": user_id})
+                await db.execute("update users set trial_used_at = now(), trial_device = :d, trial_ip = :ip where id = :u",
+                                 {"u": user_id, "d": trial_ctx["device"], "ip": trial_ctx["ip"]})
                 price, source = 0.0, "trial"
         if await balance_of(db, user_id) < price:
             raise HTTPException(402, "Not enough balance")
@@ -107,7 +110,8 @@ async def place_order(user_id: int, service_id: int, link: str, quantity: int, c
         async with transaction() as db:
             await _fail_and_refund(db, order["id"], user_id, price)
             if source == "trial":   # the trial wasn't delivered: give it back
-                await db.execute("update users set trial_used_at = null where id = :u", {"u": user_id})
+                await db.execute("update users set trial_used_at = null, trial_device = null, trial_ip = null where id = :u",
+                                 {"u": user_id})
         raise HTTPException(400, f"Order rejected by provider: {e}")
     except Exception:
         # network error/timeout: we can't know whether it was placed — never auto-refund
