@@ -63,9 +63,10 @@ def page(*, path: str, title: str, description: str, body: str, jsonld: list | N
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="{FONTS}">
-<link rel="icon" href="/favicon.ico?v=3" sizes="any">
-<link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=3">
-<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=3">
+<link rel="icon" href="/favicon.ico?v=4" sizes="any">
+<link rel="icon" type="image/png" sizes="64x64" href="/assets/img/favicon.png?v=4">
+<link rel="icon" type="image/png" sizes="32x32" href="/assets/img/favicon-32.png?v=4">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=4">
 <link rel="manifest" href="/site.webmanifest">
 <link rel="stylesheet" href="/assets/app.css?v={ASSET_VERSION}">
 </head>
