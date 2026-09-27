@@ -73,15 +73,12 @@ export function showBadgeIntro(tier, { note = "" } = {}) {
         <ul class="bi-perks">${info.perks.map((p, i) => `<li style="--i:${i}"><span>${p}</span></li>`).join("")}</ul>
         <button type="button" class="btn btn-primary btn-lg bi-close">${info.button}</button>
       </div>`;
+    // only the button closes it: no tapping outside, no Esc
     const close = () => {
       root.classList.add("bi-out");
-      removeEventListener("keydown", onKey);
       setTimeout(() => { root.remove(); resolve(); }, 220);
     };
-    const onKey = (e) => { if (e.key === "Escape") close(); };
-    root.querySelector(".bi-close").addEventListener("click", close);
-    root.querySelector(".bi-backdrop").addEventListener("click", close);
-    addEventListener("keydown", onKey);
+    root.querySelector(".bi-close").addEventListener("click", close, { once: true });
     document.body.appendChild(root);
     root.querySelector(".bi-card").focus({ preventScroll: true });
   });
