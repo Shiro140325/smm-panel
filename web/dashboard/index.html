@@ -75,7 +75,8 @@
     try { navigator.sendBeacon ? navigator.sendBeacon("/client-error", new Blob([JSON.stringify({ page: location.pathname + location.hash, message: String(msg).slice(0, 1900) })], { type: "application/json" }))
       : fetch("/client-error", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ page: location.pathname, message: String(msg) }) }); } catch (e) {}
   }
-  window.addEventListener("error", function (e) { report((e.message || "error") + " @ " + (e.filename || "") + ":" + (e.lineno || "") + ":" + (e.colno || "")); }, true);
+  window.addEventListener("error", function (e) { if (!(e instanceof ErrorEvent)) return;   /* skip images/fonts that failed to load */
+    report((e.message || "error") + " @ " + (e.filename || "") + ":" + (e.lineno || "") + ":" + (e.colno || "")); }, true);
   window.addEventListener("unhandledrejection", function (e) { report("unhandled: " + (e.reason && (e.reason.stack || e.reason.message) || e.reason)); });
   setTimeout(function () { if (!window.__dashReady) report("dashboard did not start"); }, 8000);
 })();
