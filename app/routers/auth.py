@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.exc import IntegrityError
 
-from app.db import DB, get_db
+from app import verify
+from app.db import DB, get_db, transaction
 from app.ratelimit import Limiter, client_ip
 from app.tiers import current_tier
 from app.trial import device_of, trial_for
@@ -30,6 +31,10 @@ signups_ip = Limiter(int(os.environ.get("SIGNUPS_PER_IP_HOUR", "5")), 3600,
 class Credentials(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
+
+
+class CodeIn(BaseModel):
+    code: str = Field(max_length=20)
 
 
 class RegisterIn(Credentials):
@@ -57,7 +62,7 @@ async def register(body: RegisterIn, request: Request, response: Response, db: D
     except IntegrityError:
         raise HTTPException(409, "Email already registered")
     issue_session(response, user["id"])
-    return {"id": user["id"], "email": user["email"],
+    return {"id": user["id"], "email": user["email"], "email_verified": False, "verify_required": verify.required(),
             "trial": await trial_for(db, user["id"], device_of(request), client_ip(request))}
 
 
@@ -87,5 +92,22 @@ async def logout(response: Response):
 
 @router.get("/me")
 async def me(request: Request, user: dict = Depends(current_user), db: DB = Depends(get_db)):
+    verified = await db.fetch_val("select email_verified_at is not null from users where id = :u", {"u": user["id"]})
     return {**user, "balance_php": await balance_of(db, user["id"]), "tier": await current_tier(db, user["id"]),
+            "email_verified": bool(verified), "verify_required": verify.required(),
             "trial": await trial_for(db, user["id"], device_of(request), client_ip(request))}
+
+
+@router.post("/verify/send")
+async def verify_send(user: dict = Depends(current_user)):
+    """Email a 6-digit code (the dashboard asks for one right after sign-up)."""
+    if not verify.required():
+        raise HTTPException(400, "Email verification isn't turned on")
+    return await verify.send_code(user["id"])
+
+
+@router.post("/verify")
+async def verify_check(body: CodeIn, request: Request, user: dict = Depends(current_user)):
+    await verify.check_code(user["id"], body.code)
+    async with transaction() as db:
+        return {"email_verified": True, "trial": await trial_for(db, user["id"], device_of(request), client_ip(request))}

@@ -118,3 +118,20 @@ async def pm_pay(sid: str = Form(...), amount_php: int = Form(...), source: str 
 @app.get("/_pm_last_create")
 async def pm_last_create():
     return PM["last_create"] or {}
+
+
+# --- fake Resend: records emails so tests can read the verification code
+EMAILS: list[dict] = []
+
+
+@app.post("/emails")
+async def resend_emails(body: dict):
+    if body.get("to") == ["bounce@example.com"]:
+        return JSONResponse({"message": "rejected"}, status_code=422)
+    EMAILS.append(body)
+    return {"id": f"em_{len(EMAILS)}"}
+
+
+@app.get("/_emails")
+async def last_emails(to: str):
+    return [e for e in EMAILS if to in e.get("to", [])]

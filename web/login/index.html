@@ -83,7 +83,7 @@
     try {
       const res = await api(mode === "login" ? "/auth/login" : "/auth/register", { method: "POST", body: mode === "register" && ref ? { email, password, ref } : { email, password } });
       // new account: the dashboard opens with the welcome guide (and the free trial order, when offered)
-      if (mode === "register") { try { localStorage.setItem("tour", res.trial && res.trial.available ? "trial" : "guide"); localStorage.removeItem("tourStep"); } catch { /* private mode */ } }
+      if (mode === "register") { try { localStorage.setItem("tour", res.trial && (res.trial.available || res.trial.needs_verify) ? "trial" : "guide"); localStorage.removeItem("tourStep"); } catch { /* private mode */ } }
       location.replace("/dashboard/");
     } catch (ex) {
       err.textContent = ex.message;

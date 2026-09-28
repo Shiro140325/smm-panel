@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     topup_min_php: int = 100
     topup_max_php: int = 50000
 
+    resend_api_key: str = ""          # email verification codes; verification is off while empty
+    resend_api_url: str = "https://api.resend.com"
+    email_from: str = "SMM Shiro <noreply@smmshiro.com>"
+    email_reply_to: str = "support@smmshiro.com"
     trial_enabled: bool = True        # new accounts get one free trial order (app/trial.py) with the welcome guide
     referral_pct: float = 5.0        # affiliate commission: % of each top-up a referred customer completes
 

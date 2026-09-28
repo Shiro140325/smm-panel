@@ -12,6 +12,7 @@ import time
 
 from fastapi import Request
 
+from app import verify
 from app.config import get_settings
 from app.pricing import SERVICE_SELECT
 
@@ -42,13 +43,17 @@ def device_of(request: Request) -> str | None:
 
 async def trial_for(db, user_id: int, device: str | None = None, ip: str | None = None) -> dict:
     """What the dashboard needs: the trial service and quantity, and whether this account, on this
-    device and network, can still use it."""
+    device and network, can still use it. `needs_verify`: it would be available once the email is verified."""
     sid = await trial_service_id(db) if get_settings().trial_enabled else None
-    used = await db.fetch_val("select trial_used_at is not null from users where id = :u", {"u": user_id})
+    u = await db.fetch_one("select trial_used_at is not null as used, email_verified_at is not null as verified "
+                           "from users where id = :u", {"u": user_id})
+    used = u["used"]
     taken = bool(await db.fetch_val(f"""
         select 1 from users
          where id <> :u and trial_used_at is not null
            and ((CAST(:d AS text) is not null and trial_device = :d)
                 or (CAST(:ip AS text) is not null and trial_ip = :ip and trial_used_at > now() - interval '{TRIAL_IP_DAYS} days'))
          limit 1""", {"u": user_id, "d": device, "ip": ip}))
-    return {"service_id": sid, "quantity": TRIAL_QTY, "available": bool(sid) and not used and not taken}
+    open_ = bool(sid) and not used and not taken
+    locked = open_ and verify.required() and not u["verified"]
+    return {"service_id": sid, "quantity": TRIAL_QTY, "available": open_ and not locked, "needs_verify": locked}

@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import sys
 import time
 import uuid
@@ -612,9 +613,59 @@ async def main():
                       "values (237, 1, 9001, 'facebook', 'Reactions', 'Facebook Post Reaction', 'Basic') returning id"))[0]["id"]
     def dev_client(dev, ip):
         return httpx.AsyncClient(base_url=API, headers={"X-Device": dev * 32, "cf-connecting-ip": ip})
+    async def last_code(email):
+        mails = (await httpx.AsyncClient(base_url=MOCK).get("/_emails", params={"to": email})).json()
+        return re.search(r"\b(\d{6})\b", mails[-1]["text"]).group(1) if mails else None
+    async def verify(cl, email):
+        await cl.post("/auth/verify/send")
+        return await cl.post("/auth/verify", json={"code": await last_code(email)})
     cn = dev_client("a", "10.9.0.1")
     r = await cn.post("/auth/register", json={"email": "trial@example.com", "password": "password123"})
-    check("trial: offered at sign-up on service 237, up to 100", r.json()["trial"] == {"service_id": tsid, "quantity": 100, "available": True}, r.text)
+    check("trial: locked until the email is verified", r.json()["trial"] == {"service_id": tsid, "quantity": 100, "available": False, "needs_verify": True}
+          and r.json()["verify_required"] and not r.json()["email_verified"], r.text)
+    r = await cn.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/1", "quantity": 100})
+    check("trial: not free before verifying", r.status_code == 402, r.text)
+    # --- email verification
+    r = await cn.post("/auth/verify", json={"code": "123456"})
+    check("verify: asks for a code first", r.status_code == 400 and "Ask for a code" in r.text, r.text)
+    r = await cn.post("/auth/verify/send")
+    mail = (await httpx.AsyncClient(base_url=MOCK).get("/_emails", params={"to": "trial@example.com"})).json()
+    check("verify: code emailed from noreply@smmshiro.com", r.status_code == 200 and len(mail) == 1
+          and mail[0]["from"] == "SMM Shiro <noreply@smmshiro.com>" and re.search(r"\b\d{6}\b", mail[0]["subject"]), (r.text, mail))
+    r = await cn.post("/auth/verify/send")
+    check("verify: one code per minute", r.status_code == 429 and "Wait" in r.text, r.text)
+    code = await last_code("trial@example.com")
+    wrong = f"{(int(code) + 1) % 1000000:06d}"
+    r = await cn.post("/auth/verify", json={"code": wrong})
+    check("verify: wrong code counted", r.status_code == 400 and "4 tries left" in r.text, r.text)
+    r = await cn.post("/auth/verify", json={"code": wrong})
+    check("verify: wrong tries persist", r.status_code == 400 and "3 tries left" in r.text, r.text)
+    await sql("update email_codes set expires_at = now() - interval '1 minute' where user_id = (select id from users where email = 'trial@example.com')")
+    r = await cn.post("/auth/verify", json={"code": code})
+    check("verify: expired code refused", r.status_code == 400 and "expired" in r.text, r.text)
+    await sql("update email_codes set expires_at = now() + interval '10 minutes' where user_id = (select id from users where email = 'trial@example.com')")
+    r = await cn.post("/auth/verify", json={"code": f"{code[:3]} {code[3:]}"})
+    check("verify: right code (spaces ignored) unlocks the trial", r.status_code == 200 and r.json()["email_verified"]
+          and r.json()["trial"]["available"] is True, r.text)
+    check("verify: code deleted and account marked", (await sql("select count(*) n from email_codes"))[0]["n"] == 0
+          and (await cn.get("/auth/me")).json()["email_verified"] is True)
+    r = await cn.post("/auth/verify/send")
+    check("verify: no new code once verified", r.status_code == 409, r.text)
+    cb = dev_client("x", "10.9.0.9")
+    await cb.post("/auth/register", json={"email": "bounce@example.com", "password": "password123"})
+    r = await cb.post("/auth/verify/send")
+    check("verify: sending failure is reported, not hidden", r.status_code == 502, r.text)
+    check("verify: a failed send leaves no code behind", (await sql(
+        "select count(*) n from email_codes where user_id = (select id from users where email = 'bounce@example.com')"))[0]["n"] == 0)
+    await cb.aclose()
+    cd = dev_client("y", "10.9.0.8")
+    await cd.post("/auth/register", json={"email": "dead@example.com", "password": "password123"})
+    await cd.post("/auth/verify/send")
+    await sql("update email_codes set attempts = 5 where user_id = (select id from users where email = 'dead@example.com')")
+    r = await cd.post("/auth/verify", json={"code": await last_code("dead@example.com")})
+    check("verify: after 5 wrong tries even the right code is refused", r.status_code == 429, r.text)
+    await cd.aclose()
+    # --- the trial itself
     r = await cn.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/1", "quantity": 101})
     check("trial: more than 100 isn't free", r.status_code == 402, r.text)
     r = await cn.post("/orders", json={"service_id": 1, "link": "https://tiktok.com/@t/video/1", "quantity": 100})
@@ -628,27 +679,30 @@ async def main():
     check("trial: only once per account", r.status_code == 402, r.text)
     cn2 = dev_client("b", "10.9.0.2")
     await cn2.post("/auth/register", json={"email": "trial2@example.com", "password": "password123"})
+    await verify(cn2, "trial2@example.com")
     r = await cn2.post("/orders", json={"service_id": tsid, "link": "https://TIKTOK.com/@t/video/1", "quantity": 100})
     check("trial: only once per link, even from another account", r.status_code == 400 and "already had a free trial" in r.text, r.text)
     await sql("update users set trial_used_at = now() where email = 'trial2@example.com'")
     check("trial: accounts from before the trial don't get it", (await cn2.get("/auth/me")).json()["trial"]["available"] is False)
     cn3 = dev_client("a", "10.9.0.3")   # same device, new account and network
     r = await cn3.post("/auth/register", json={"email": "trial3@example.com", "password": "password123"})
-    check("trial: one per device, even on a new account", r.json()["trial"]["available"] is False, r.text)
+    check("trial: one per device, even on a new account", r.json()["trial"]["available"] is False and not r.json()["trial"]["needs_verify"], r.text)
+    await verify(cn3, "trial3@example.com")
     r = await cn3.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/3", "quantity": 100})
-    check("trial: same device can't order it free", r.status_code == 402, r.text)
+    check("trial: same device can't order it free, even verified", r.status_code == 402, r.text)
     cn4 = dev_client("c", "10.9.0.1")   # new device, same network within 30 days
     r = await cn4.post("/auth/register", json={"email": "trial4@example.com", "password": "password123"})
-    check("trial: one per network for 30 days", r.json()["trial"]["available"] is False, r.text)
+    check("trial: one per network for 30 days", r.json()["trial"]["available"] is False and not r.json()["trial"]["needs_verify"], r.text)
     cn5 = dev_client("d", "10.9.0.5")
     r = await cn5.post("/auth/register", json={"email": "trial5@example.com", "password": "password123"})
-    check("trial: a new device on a new network still gets it", r.json()["trial"]["available"] is True, r.text)
+    check("trial: a new device on a new network can get it", r.json()["trial"]["needs_verify"] is True, r.text)
+    await verify(cn5, "trial5@example.com")
     r = await cn5.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/5", "quantity": 50})
     check("trial: less than 100 is free too; device and network recorded", r.status_code == 200 and (await sql(
         "select trial_device, trial_ip from users where email = 'trial5@example.com'"))[0] == {"trial_device": "d" * 32, "trial_ip": "10.9.0.5"}, r.text)
     await sql("update users set trial_used_at = now() - interval '31 days' where email = 'trial@example.com'")
     r = await dev_client("e", "10.9.0.1").post("/auth/register", json={"email": "trial6@example.com", "password": "password123"})
-    check("trial: network block expires after 30 days", r.json()["trial"]["available"] is True, r.text)
+    check("trial: network block expires after 30 days", r.json()["trial"]["needs_verify"] is True, r.text)
     for x in (cn, cn2, cn3, cn4, cn5): await x.aclose()
 
     # --- ledger integrity

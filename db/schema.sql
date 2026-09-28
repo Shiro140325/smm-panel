@@ -163,3 +163,15 @@ create table if not exists client_errors (
   message    text,
   user_agent text
 );
+
+-- Email verification (6-digit codes; only the free trial needs a verified email).
+alter table users add column if not exists email_verified_at timestamptz;
+create table if not exists email_codes (
+  user_id    bigint primary key references users(id) on delete cascade,
+  code_hash  text not null,                -- HMAC of the code, never the code itself
+  expires_at timestamptz not null,
+  attempts   int not null default 0,       -- wrong tries on the current code
+  sent_at    timestamptz not null,
+  sends_hour int not null default 1,       -- codes sent since hour_start
+  hour_start timestamptz not null
+);
