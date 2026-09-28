@@ -279,3 +279,119 @@ async def get_announcement(db: DB = Depends(get_db)):
 async def set_announcement(body: AnnouncementIn, db: DB = Depends(get_db)):
     """Empty text removes the bar."""
     return {**await announcement.save(db, body.text), "max_chars": announcement.MAX_CHARS}
+
+
+@router.get("/growth", dependencies=[Depends(require_admin)])
+async def growth(days: int = 14, db: DB = Depends(get_db)):
+    """Day by day (Philippine time): sign-ups and how many of them went on to order and to pay,
+    plus the day's paid top-ups and orders. And the all-time funnel."""
+    days = max(1, min(days, 90))
+    rows = await db.fetch_all("""
+        with d as (select CAST(g AS date) as day
+                     from generate_series(CAST(CAST(now() at time zone 'Asia/Manila' AS date) - CAST(:back AS int) AS timestamp),
+                                          CAST(CAST(now() at time zone 'Asia/Manila' AS date) AS timestamp), interval '1 day') g),
+             u as (select id, CAST(created_at at time zone 'Asia/Manila' AS date) as day,
+                          exists (select 1 from orders o where o.user_id = users.id) as ordered,
+                          exists (select 1 from topups t where t.user_id = users.id and t.status = 'credited') as paid
+                     from users)
+        select d.day,
+               (select count(*) from u where u.day = d.day) as signups,
+               (select count(*) from u where u.day = d.day and u.ordered) as signups_ordered,
+               (select count(*) from u where u.day = d.day and u.paid) as signups_paid,
+               (select count(*) from topups t where t.status = 'credited'
+                   and CAST(t.credited_at at time zone 'Asia/Manila' AS date) = d.day) as topups,
+               (select coalesce(sum(amount_php), 0) from topups t where t.status = 'credited'
+                   and CAST(t.credited_at at time zone 'Asia/Manila' AS date) = d.day) as topups_php,
+               (select count(*) from orders o where o.status not in ('failed', 'creating')
+                   and CAST(o.created_at at time zone 'Asia/Manila' AS date) = d.day) as orders,
+               (select count(distinct o.user_id) from orders o where o.status not in ('failed', 'creating')
+                   and CAST(o.created_at at time zone 'Asia/Manila' AS date) = d.day) as buyers
+          from d order by d.day desc
+    """, {"back": days - 1})
+    funnel = await db.fetch_one("""
+        select count(*) as signed_up,
+               count(*) filter (where exists (select 1 from orders o where o.user_id = u.id)) as ordered,
+               count(*) filter (where exists (select 1 from orders o where o.user_id = u.id and o.source = 'trial')) as used_trial,
+               count(*) filter (where exists (select 1 from topups t where t.user_id = u.id)) as tried_topup,
+               count(*) filter (where exists (select 1 from topups t where t.user_id = u.id and t.status = 'credited')) as paid,
+               count(*) filter (where (select count(*) from topups t where t.user_id = u.id and t.status = 'credited') >= 2) as paid_twice
+          from users u
+    """)
+    return {"days": [{**r, "day": r["day"].isoformat(), "topups_php": float(r["topups_php"])} for r in rows],
+            "funnel": dict(funnel)}
+
+
+@router.get("/affiliates", dependencies=[Depends(require_admin)])
+async def affiliates(db: DB = Depends(get_db)):
+    """Customers who brought in at least one sign-up with their referral link, and who they brought."""
+    referrals = await db.fetch_all("""
+        select u.id, u.email, u.created_at, u.referred_by,
+               (select count(*) from orders o where o.user_id = u.id) as orders,
+               coalesce((select sum(amount_php) from topups t where t.user_id = u.id and t.status = 'credited'), 0) as topped_up_php,
+               coalesce((select sum(l.delta) from ledger l join topups t on t.id::text = l.ref
+                          where l.reason = 'referral' and t.user_id = u.id), 0) as commission_php
+          from users u where u.referred_by is not null
+         order by u.created_at desc
+    """)
+    refs = await db.fetch_all("""
+        select r.id, r.email, r.ref_code, r.created_at,
+               coalesce((select sum(delta) from ledger l where l.user_id = r.id and l.reason = 'referral'), 0) as earned_php,
+               coalesce((select sum(delta) from ledger l where l.user_id = r.id), 0) as balance_php
+          from users r where exists (select 1 from users u where u.referred_by = r.id)
+    """)
+    by_ref: dict[int, list] = {}
+    for x in referrals:
+        by_ref.setdefault(x["referred_by"], []).append({**x, "topped_up_php": float(x["topped_up_php"]),
+                                                        "commission_php": float(x["commission_php"])})
+    out = []
+    for r in refs:
+        people = by_ref.get(r["id"], [])
+        out.append({**r, "earned_php": float(r["earned_php"]), "balance_php": float(r["balance_php"]),
+                    "referred": len(people), "paying": sum(1 for p in people if p["topped_up_php"] > 0),
+                    "referred_topups_php": round(sum(p["topped_up_php"] for p in people), 2),
+                    "last_referral_at": max(p["created_at"] for p in people), "people": people})
+    out.sort(key=lambda a: (-a["paying"], -a["referred"], -a["last_referral_at"].timestamp()))
+    return {"affiliates": out, "referral_pct": get_settings().referral_pct}
+
+
+@router.get("/trials", dependencies=[Depends(require_admin)])
+async def trials(limit: int = 100, db: DB = Depends(get_db)):
+    """Free trial orders, with the device and network they were claimed from. `shared_ip` counts
+    other accounts whose trial came from the same IP (a sign of one person with several accounts)."""
+    return await db.fetch_all("""
+        select o.id, o.created_at, o.status, o.quantity, o.link, u.id as user_id, u.email, u.created_at as joined,
+               u.trial_device, u.trial_ip,
+               (select count(*) from users x where x.id <> u.id and x.trial_ip is not null and x.trial_ip = u.trial_ip) as shared_ip,
+               exists (select 1 from topups t where t.user_id = u.id and t.status = 'credited') as paid_after
+          from orders o join users u on u.id = o.user_id
+         where o.source = 'trial'
+         order by o.created_at desc limit :lim
+    """, {"lim": max(1, min(limit, 200))})
+
+
+@router.get("/ledger", dependencies=[Depends(require_admin)])
+async def ledger(reason: str | None = None, q: str | None = None, limit: int = 100, db: DB = Depends(get_db)):
+    """Every movement of customer money, newest first."""
+    where, params = ["true"], {"lim": max(1, min(limit, 200))}
+    if reason:
+        where.append("l.reason = :r")
+        params["r"] = reason
+    if q:
+        where.append("(u.email ilike :ql or u.id::text = :q or l.ref = :q)")
+        params.update(q=q.strip().lstrip("#"), ql=f"%{q.strip()}%")
+    rows = await db.fetch_all(f"""
+        select l.id, l.created_at, l.delta, l.reason, l.ref, u.id as user_id, u.email
+          from ledger l join users u on u.id = l.user_id
+         where {' and '.join(where)}
+         order by l.created_at desc, l.id desc limit :lim
+    """, params)
+    return [{**r, "delta": float(r["delta"])} for r in rows]
+
+
+@router.get("/errors", dependencies=[Depends(require_admin)])
+async def errors(db: DB = Depends(get_db)):
+    """Problems customers' browsers reported, newest first."""
+    return await db.fetch_all("""
+        select id, created_at, page, message, user_agent from client_errors
+         order by created_at desc limit 100
+    """)

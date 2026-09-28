@@ -72,20 +72,31 @@ function showPanel() {
   render();
 }
 
-/* any 401 mid-session (expired) → back to sign in */
+/* any 401 mid-session (expired) → back to sign in. A reply that arrives after switching tabs is
+   dropped (the promise never settles), so it can't draw into the tab now showing. */
 async function call(path, opts) {
-  try { return await api(path, opts); } catch (e) {
+  const at = route();
+  const stale = () => route() !== at;
+  try {
+    const r = await api(path, opts);
+    return stale() ? new Promise(() => {}) : r;
+  } catch (e) {
     if (e.status === 401) showLogin("Your session ended. Sign in again.");
+    if (stale()) return new Promise(() => {});
     throw e;
   }
 }
 
 function render() {
   const name = route();
+  const inMore = MORE.some(([n]) => n === name);
   document.querySelectorAll("[data-nav]").forEach((a) => {
-    if (a.dataset.nav === name) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+    const on = a.dataset.nav === name || (inMore && a.dataset.nav === "more" && a.closest(".tabbar"));
+    if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   });
-  ({ overview: renderOverview, orders: renderOrders, customers: renderCustomers, topups: renderTopups, services: renderServices }[name]
+  ({ overview: renderOverview, orders: renderOrders, customers: renderCustomers, topups: renderTopups, services: renderServices,
+     growth: renderGrowth, affiliates: renderAffiliates, trials: renderTrials, ledger: renderLedger, errors: renderErrors,
+     more: renderMore }[name]
     || renderOverview)();
   window.scrollTo(0, 0);
 }
@@ -345,6 +356,188 @@ function renderServices() {
   }));
   $("q").addEventListener("input", debounce((e) => { q = e.target.value.trim(); load(); }));
   load();
+}
+
+/* ------------------------------------------------------------ more (phones: the tabs that don't fit the bar) */
+
+const MORE = [
+  ["services", "grid", "Services", "Hide or show services"],
+  ["growth", "monitor", "Growth", "Sign-ups, orders and payments by day"],
+  ["affiliates", "gift", "Affiliates", "Customers who brought in sign-ups"],
+  ["trials", "done", "Free trials", "Who claimed a trial, and from where"],
+  ["ledger", "check", "Ledger", "Every movement of customer money"],
+  ["errors", "warn", "Error reports", "Problems customers' browsers reported"],
+];
+
+function renderMore() {
+  view.innerHTML = `<div class="page-head"><h1>More</h1></div>
+    <div class="more-list">${MORE.map(([n, icon, t, sub]) => `
+      <a class="card more-item" href="#${n}"><span class="more-icon">${icons[icon](20)}</span>
+        <span class="grow"><span class="t">${t}</span><span class="s">${sub}</span></span></a>`).join("")}</div>`;
+}
+
+const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : "–");
+const dayLabel = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString("en-PH", { weekday: "short", month: "short", day: "numeric" });
+const failRow = (cols, e) => `<tr><td colspan="${cols}" class="empty">${esc(e.message)}</td></tr>`;
+
+/* ------------------------------------------------------------ growth */
+
+async function renderGrowth() {
+  let days = 14;
+  view.innerHTML = `<div class="page-head"><h1>Growth</h1></div>
+    <div id="funnel"><div class="card empty">Loading…</div></div>
+    <div class="pill-row" role="group" aria-label="Period" style="margin-top:18px">${[7, 14, 30].map((d) => pill(String(d), `${d} days`, String(days), "data-d")).join("")}</div>
+    <div class="card table-card"><div class="table-scroll"><table class="table">
+      <thead><tr><th>Day</th><th class="num">Sign-ups</th><th class="num">…ordered</th><th class="num">…paid</th>
+        <th class="num">Top-ups</th><th class="num">Topped up</th><th class="num">Orders</th><th class="num">Buyers</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody></table></div></div>
+    <p class="hint">Philippine time. "…ordered" and "…paid" count that day's sign-ups who have since placed an order or had a top-up credited (so recent days can still go up). Top-ups, orders and buyers are what happened on that day.</p>`;
+  const load = async () => {
+    let d;
+    try { d = await call(`/admin/api/growth?days=${days}`); } catch (e) { $("rows").innerHTML = failRow(8, e); return; }
+    const f = d.funnel;
+    const step = (k, v, s) => `<div class="stat"><span class="k">${k}</span><span class="v">${num(v)}</span><span class="s">${s}</span></div>`;
+    $("funnel").innerHTML = `<div class="stats">
+      ${step("Signed up", f.signed_up, "All time")}
+      ${step("Placed an order", f.ordered, `${pct(f.ordered, f.signed_up)} of sign-ups · ${num(f.used_trial)} used the free trial`)}
+      ${step("Started a top-up", f.tried_topup, `${pct(f.tried_topup, f.signed_up)} of sign-ups`)}
+      ${step("Paid", f.paid, `${pct(f.paid, f.signed_up)} of sign-ups · ${pct(f.paid, f.tried_topup)} of those who started`)}
+      ${step("Paid again", f.paid_twice, `${pct(f.paid_twice, f.paid)} of paying customers`)}
+    </div>`;
+    $("rows").innerHTML = d.days.map((r) => `<tr>
+      <td style="white-space:nowrap">${dayLabel(r.day)}</td>
+      <td class="num"><strong>${num(r.signups)}</strong></td>
+      <td class="num">${num(r.signups_ordered)} <span class="muted">${r.signups ? pct(r.signups_ordered, r.signups) : ""}</span></td>
+      <td class="num">${num(r.signups_paid)} <span class="muted">${r.signups ? pct(r.signups_paid, r.signups) : ""}</span></td>
+      <td class="num">${num(r.topups)}</td><td class="num">${peso(r.topups_php)}</td>
+      <td class="num">${num(r.orders)}</td><td class="num">${num(r.buyers)}</td></tr>`).join("");
+  };
+  view.querySelectorAll("[data-d]").forEach((b) => b.addEventListener("click", () => {
+    days = Number(b.dataset.d);
+    view.querySelectorAll("[data-d]").forEach((x) => x.setAttribute("aria-pressed", x === b));
+    load();
+  }));
+  load();
+}
+
+/* ------------------------------------------------------------ affiliates */
+
+async function renderAffiliates() {
+  view.innerHTML = `<div class="page-head"><h1>Affiliates</h1></div>
+    <div id="aff-stats"></div>
+    <div class="card table-card" style="margin-top:18px"><div class="table-scroll"><table class="table">
+      <thead><tr><th>Affiliate</th><th class="num">Signed up</th><th class="num">Paying</th><th class="num">Their top-ups</th><th class="num">Commission earned</th><th>Last sign-up</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody></table></div></div>
+    <p class="hint">Customers who brought in at least one sign-up with their referral link. Commission is paid to their balance on every top-up their referrals make.</p>`;
+  let d;
+  try { d = await call("/admin/api/affiliates"); } catch (e) { $("rows").innerHTML = failRow(6, e); return; }
+  const a = d.affiliates;
+  const tot = (k) => a.reduce((t, x) => t + x[k], 0);
+  $("aff-stats").innerHTML = `<div class="stats">
+    <div class="stat"><span class="k">Affiliates</span><span class="v">${num(a.length)}</span><span class="s">${num(a.filter((x) => x.paying).length)} brought a paying customer</span></div>
+    <div class="stat"><span class="k">Referred sign-ups</span><span class="v">${num(tot("referred"))}</span><span class="s">${num(tot("paying"))} of them paid</span></div>
+    <div class="stat"><span class="k">Referred top-ups</span><span class="v">${peso(tot("referred_topups_php"))}</span><span class="s">All time</span></div>
+    <div class="stat"><span class="k">Commission paid</span><span class="v">${peso(tot("earned_php"))}</span><span class="s">Base rate ${d.referral_pct}% (higher for Pro and Elite)</span></div>
+  </div>`;
+  $("rows").innerHTML = a.length ? a.map((x) => `<tr>
+      <td><div style="font-weight:600">${esc(x.email)}</div><div class="hint" style="margin:2px 0 6px">#${x.id} · code ${esc(x.ref_code || "–")} · balance ${peso(x.balance_php)}</div>
+        <button type="button" class="btn btn-ghost btn-sm" data-people="${x.id}">Show sign-ups</button></td>
+      <td class="num"><strong>${num(x.referred)}</strong></td><td class="num">${num(x.paying)}</td>
+      <td class="num">${peso(x.referred_topups_php)}</td><td class="num"><strong>${peso(x.earned_php)}</strong></td>
+      <td class="muted" style="white-space:nowrap">${fmtDate(x.last_referral_at)}</td></tr>
+    <tr class="hidden" id="people-${x.id}"><td colspan="6" style="white-space:normal">
+      <div class="hint" style="margin:0 0 6px;font-weight:600">Signed up with ${esc(x.email)}'s link</div>
+      ${x.people.map((p) => `<div style="padding:6px 0;border-top:1px solid var(--line)">
+        <strong>${esc(p.email)}</strong> <span class="muted">#${p.id} · joined ${fmtDate(p.created_at)}</span>
+        <div class="hint" style="margin:2px 0 0">${num(p.orders)} order${p.orders === 1 ? "" : "s"} · topped up ${peso(p.topped_up_php)} · earned them ${peso(p.commission_php)}</div>
+      </div>`).join("")}
+    </td></tr>`).join("") : `<tr><td colspan="6" class="empty">No one has brought in a sign-up with their link yet.</td></tr>`;
+  $("rows").querySelectorAll("[data-people]").forEach((b) => b.addEventListener("click", () => {
+    const row = $(`people-${b.dataset.people}`);
+    row.classList.toggle("hidden");
+    b.textContent = row.classList.contains("hidden") ? "Show sign-ups" : "Hide sign-ups";
+  }));
+}
+
+/* ------------------------------------------------------------ free trials */
+
+async function renderTrials() {
+  view.innerHTML = `<div class="page-head"><h1>Free trials</h1></div>
+    <p class="hint" id="trial-sum" style="margin-top:-6px"></p>
+    <div class="card table-card"><div class="table-scroll"><table class="table">
+      <thead><tr><th>Date</th><th>Customer</th><th class="num">Qty</th><th>Status</th><th>Network</th><th>Paid later</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody></table></div></div>
+    <p class="hint">One trial per account, link and device, and one per network every 30 days. "Shares network" means other trial accounts came from the same IP address: often one person with several accounts, sometimes a shared connection like mobile data.</p>`;
+  let rows;
+  try { rows = await call("/admin/api/trials"); } catch (e) { $("rows").innerHTML = failRow(6, e); return; }
+  const paid = rows.filter((r) => r.paid_after).length;
+  if (rows.length) $("trial-sum").textContent = `${num(rows.length)} trial${rows.length === 1 ? "" : "s"} · ${num(paid)} of those customers topped up afterwards (${pct(paid, rows.length)}).`;
+  $("rows").innerHTML = rows.length ? rows.map((r) => `<tr>
+    <td class="muted" style="white-space:nowrap">${fmtDate(r.created_at)}</td>
+    <td><div style="font-weight:600">${esc(r.email)} <span class="muted">#${r.user_id}</span></div>
+      ${/^https?:\/\//i.test(r.link || "") ? `<a class="btn open-link" href="${esc(r.link)}" target="_blank" rel="noopener noreferrer" title="${esc(r.link)}">${icons.external(14)}Open link</a>` : ""}</td>
+    <td class="num">${num(r.quantity)}</td><td>${badge(ORDER_STATUS, r.status)}</td>
+    <td><span class="mono" style="font-size:13px">${esc(r.trial_ip || "–")}</span>
+      ${r.shared_ip ? `<div><span class="badge badge-failed">Shares network with ${r.shared_ip} other${r.shared_ip === 1 ? "" : "s"}</span></div>` : ""}</td>
+    <td>${r.paid_after ? `<span class="badge badge-completed">Paid</span>` : `<span class="muted">No</span>`}</td></tr>`).join("")
+    : `<tr><td colspan="6" class="empty">No free trials claimed yet.</td></tr>`;
+}
+
+/* ------------------------------------------------------------ ledger */
+
+const REASON = { topup: "Top-up", order: "Order", refund: "Refund", adjustment: "Adjustment", referral: "Referral commission",
+  welcome: "Welcome credit", tier_bonus: "Tier bonus" };
+
+function renderLedger() {
+  let reason = "", q = "";
+  view.innerHTML = `<div class="page-head"><h1>Ledger</h1></div>
+    <div class="orders-toolbar">
+      <div class="pill-row" role="group" aria-label="Type">${pill("", "All", "", "data-r")}${Object.entries(REASON).map(([v, l]) => pill(v, l, "", "data-r")).join("")}</div>
+      <input class="input" id="q" type="search" placeholder="Email, customer # or reference">
+    </div>
+    <div class="card table-card"><div class="table-scroll"><table class="table">
+      <thead><tr><th>Date</th><th>Customer</th><th>Type</th><th>Reference</th><th class="num">Amount</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody></table></div></div>
+    <p class="hint">Every change to a customer's balance; a balance is the sum of its rows. Showing the latest 100 matches.</p>`;
+  const load = async () => {
+    const qs = new URLSearchParams({ ...(reason && { reason }), ...(q && { q }) });
+    let rows;
+    try { rows = await call(`/admin/api/ledger?${qs}`); } catch (e) { $("rows").innerHTML = failRow(5, e); return; }
+    const refText = (r) => (r.reason === "order" || r.reason === "refund") ? `Order #${esc(r.ref)}`
+      : r.reason === "adjustment" ? esc(r.ref || "") : `<span class="mono muted" style="font-size:12px">${esc((r.ref || "").slice(0, 13))}</span>`;
+    $("rows").innerHTML = rows.length ? rows.map((r) => `<tr>
+      <td class="muted" style="white-space:nowrap">${fmtDate(r.created_at)}</td>
+      <td>${esc(r.email)} <span class="muted">#${r.user_id}</span></td>
+      <td>${esc(REASON[r.reason] || r.reason)}</td><td style="max-width:320px">${refText(r)}</td>
+      <td class="num"><strong>${r.delta > 0 ? "+" : "−"}${peso(Math.abs(r.delta))}</strong></td></tr>`).join("")
+      : `<tr><td colspan="5" class="empty">Nothing matches.</td></tr>`;
+  };
+  view.querySelectorAll("[data-r]").forEach((b) => b.addEventListener("click", () => {
+    reason = b.dataset.r;
+    view.querySelectorAll("[data-r]").forEach((x) => x.setAttribute("aria-pressed", x === b));
+    load();
+  }));
+  $("q").addEventListener("input", debounce((e) => { q = e.target.value.trim(); load(); }));
+  load();
+}
+
+/* ------------------------------------------------------------ error reports */
+
+async function renderErrors() {
+  view.innerHTML = `<div class="page-head"><h1>Error reports</h1></div>
+    <div id="errs"><div class="card empty">Loading…</div></div>
+    <p class="hint">Sent automatically when something breaks in a customer's browser, and by the ?debug=1 panel. The latest 100.</p>`;
+  let rows;
+  try { rows = await call("/admin/api/errors"); } catch (e) { $("errs").innerHTML = `<div class="card empty">${esc(e.message)}</div>`; return; }
+  const device = (ua = "") => /iPad/.test(ua) ? "iPad" : /iPhone/.test(ua) ? "iPhone" : /Android/.test(ua) ? "Android"
+    : /Macintosh/.test(ua) ? "Mac or iPad" : /Windows/.test(ua) ? "Windows" : "Other";
+  const browser = (ua = "") => /FBAN|FBAV/.test(ua) ? "Facebook app" : /CriOS|Chrome/.test(ua) ? "Chrome"
+    : /Firefox|FxiOS/.test(ua) ? "Firefox" : /Safari/.test(ua) ? "Safari" : "";
+  $("errs").innerHTML = rows.length ? `<div class="more-list">${rows.map((r) => `
+    <div class="card" style="padding:14px 16px">
+      <div class="hint" style="margin:0 0 6px">${fmtDate(r.created_at)} · ${esc(r.page || "–")} · ${esc(device(r.user_agent))} ${esc(browser(r.user_agent))}</div>
+      <div class="mono" style="font-size:13px;white-space:pre-wrap;word-break:break-word">${esc((r.message || "").slice(0, 1200))}</div>
+    </div>`).join("")}</div>` : `<div class="card empty">No errors reported.</div>`;
 }
 
 start();
