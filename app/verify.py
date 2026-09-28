@@ -34,16 +34,13 @@ def _hash(user_id: int, code: str) -> str:
 
 def _email(code: str) -> tuple[str, str, str]:
     subject = f"{code} is your SMM Shiro code"
-    text = (f"Your SMM Shiro verification code is {code}\n\n"
-            "Type it on the dashboard to verify your email and unlock your free trial. "
-            "It expires in 15 minutes.\n\nDidn't sign up? You can ignore this email.")
+    text = f"Your SMM Shiro verification code is {code}"
     body = f"""<!doctype html><html><body style="margin:0;background:#f4f4f4;font-family:Arial,Helvetica,sans-serif;color:#111">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:32px 12px"><tr><td align="center">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:440px;background:#fff;border:1px solid #e2e2e2;border-radius:16px">
 <tr><td style="padding:28px 28px 8px;font-size:20px;font-weight:700">SMM Shiro</td></tr>
 <tr><td style="padding:8px 28px 0;font-size:15px;line-height:1.5">Your verification code:</td></tr>
-<tr><td style="padding:14px 28px"><div style="font-size:34px;font-weight:700;letter-spacing:8px;font-family:'Courier New',monospace;background:#f4f4f4;border-radius:12px;padding:14px 0;text-align:center">{html.escape(code)}</div></td></tr>
-<tr><td style="padding:0 28px 24px;font-size:14px;line-height:1.5;color:#555">Type it on the dashboard to verify your email and unlock your free trial. It expires in 15 minutes.<br><br>Didn't sign up? You can ignore this email.</td></tr>
+<tr><td style="padding:14px 28px 28px"><div style="font-size:34px;font-weight:700;letter-spacing:8px;font-family:'Courier New',monospace;background:#f4f4f4;border-radius:12px;padding:14px 0;text-align:center">{html.escape(code)}</div></td></tr>
 </table></td></tr></table></body></html>"""
     return subject, body, text
 
