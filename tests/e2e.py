@@ -36,6 +36,11 @@ def paid_event(topup_id, amount_php):
                                      "payments": [{"attributes": {"amount": amount_php * 100, "source": {"type": "gcash"}}}]}}}}}
 
 
+async def verify_all():
+    """Accounts in the tests below are used right after sign-up: mark them verified (the flow itself is tested later)."""
+    await sql("update users set email_verified_at = now() where email_verified_at is null")
+
+
 async def sql(q, params=None):
     from app.db import transaction
     async with transaction() as db:
@@ -88,6 +93,13 @@ async def main():
     r = await c.post("/auth/register", json={"email": "Juan@Example.com", "password": "password123"})
     check("register", r.status_code == 200, r.text)
     check("no free credit at sign-up (free trial order instead)", "welcome_php" not in r.json() and "trial" in r.json(), r.text)
+    check("verify: sign-up says a code is needed", r.json()["verify_required"] is True and r.json()["email_verified"] is False, r.text)
+    r = await c.get("/auth/me")
+    check("verify: unverified account can still read /auth/me", r.status_code == 200 and r.json()["email_verified"] is False, r.text)
+    locked = [(await c.get(u)).status_code for u in ("/orders", "/topups", "/account/affiliate")] + [
+        (await c.post("/orders", json={"service_id": 1, "link": "https://x.com/a", "quantity": 100})).status_code]
+    check("verify: everything else is locked until verified", locked == [403, 403, 403, 403], locked)
+    await verify_all()
     r = await c.post("/auth/register", json={"email": "juan@example.com", "password": "password123"})
     check("duplicate email 409", r.status_code == 409, r.text)
     c2 = httpx.AsyncClient(base_url=API)
@@ -337,6 +349,7 @@ async def main():
 
     # --- other user can't touch my order
     await c2.post("/auth/register", json={"email": "other@example.com", "password": "password123"})
+    await verify_all()
     r = await c2.post(f"/orders/{o_hq['id']}/refill")
     check("other user's order 404", r.status_code == 404, r.text)
 
@@ -425,6 +438,7 @@ async def main():
     # --- customer tiers: Member → Pro (₱10k) → Elite (₱25k), website spending after refunds, kept forever
     ct = httpx.AsyncClient(base_url=API)
     tu = (await ct.post("/auth/register", json={"email": "tier@example.com", "password": "password123"})).json()["id"]
+    await verify_all()
     await sql("insert into ledger (user_id, delta, reason, ref) values (:u, 50000, 'adjustment', 'test')", {"u": tu})
     t = (await ct.get("/auth/me")).json()["tier"]
     check("tier: new account is Member, card not seen yet", t["name"] == "member" and t["seen"] is None
@@ -473,6 +487,7 @@ async def main():
     check("tier: affiliate page shows the tier's rate", code["pct"] == 7, code)
     cf = httpx.AsyncClient(base_url=API)
     fid2 = (await cf.post("/auth/register", json={"email": "friend2@example.com", "password": "password123", "ref": code["code"]})).json()["id"]
+    await verify_all()
     tid = str(uuid.uuid4())
     await sql("insert into topups (id, user_id, amount_php, method) values (CAST(:id AS uuid), :u, 500, 'paymongo')", {"id": tid, "u": fid2})
     raw, hdr = signed(paid_event(tid, 500))
@@ -507,6 +522,7 @@ async def main():
     # --- recently completed (all customers, anonymous)
     cx = httpx.AsyncClient(base_url=API)
     await cx.post("/auth/register", json={"email": "viewer@example.com", "password": "password123"})
+    await verify_all()
     feed = (await cx.get("/orders/recently-completed")).json()
     check("recently completed: other customers' orders, no links or owners",
           any(f["quantity"] == o_hq["quantity"] for f in feed) and all(set(f) == {"platform", "category", "service_name", "tier", "quantity", "completed_at", "took_seconds"} for f in feed), feed[:2])
@@ -547,6 +563,7 @@ async def main():
     fid = r.json()["id"]
     c4 = httpx.AsyncClient(base_url=API)
     await c4.post("/auth/register", json={"email": "stranger@example.com", "password": "password123", "ref": "nosuchcode"})
+    await verify_all()
     refs = {x["email"]: x["referred_by"] for x in await sql("select email, referred_by from users where email in ('friend@example.com', 'stranger@example.com')")}
     check("referral: signup link records the referrer; unknown code ignored",
           refs == {"friend@example.com": me["id"], "stranger@example.com": None}, refs)
@@ -624,7 +641,7 @@ async def main():
     check("trial: locked until the email is verified", r.json()["trial"] == {"service_id": tsid, "quantity": 100, "available": False, "needs_verify": True}
           and r.json()["verify_required"] and not r.json()["email_verified"], r.text)
     r = await cn.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/1", "quantity": 100})
-    check("trial: not free before verifying", r.status_code == 402, r.text)
+    check("trial: can't order at all before verifying", r.status_code == 403 and "Verify your email" in r.text, r.text)
     # --- email verification
     r = await cn.post("/auth/verify", json={"code": "123456"})
     check("verify: asks for a code first", r.status_code == 400 and "Ask for a code" in r.text, r.text)
@@ -665,6 +682,21 @@ async def main():
     r = await cd.post("/auth/verify", json={"code": await last_code("dead@example.com")})
     check("verify: after 5 wrong tries even the right code is refused", r.status_code == 429, r.text)
     await cd.aclose()
+    ce = dev_client("z", "10.9.0.7")
+    await ce.post("/auth/register", json={"email": "typo@exmaple.com", "password": "password123"})
+    await ce.post("/auth/verify/send")
+    r = await ce.post("/auth/verify/email", json={"email": "trial@example.com"})
+    check("verify: can't switch to an email that has an account", r.status_code == 409, r.text)
+    r = await ce.post("/auth/verify/email", json={"email": "Typo@Example.com"})
+    check("verify: mistyped email can be fixed, code goes to the new address", r.status_code == 200 and r.json()["email"] == "typo@example.com"
+          and await last_code("typo@example.com") and (await ce.get("/auth/me")).json()["email"] == "typo@example.com", r.text)
+    r = await ce.post("/auth/verify", json={"code": await last_code("typo@example.com")})
+    check("verify: the new address's code works", r.status_code == 200, r.text)
+    r = await ce.post("/auth/verify/email", json={"email": "other2@example.com"})
+    check("verify: email can't be changed once verified", r.status_code == 409, r.text)
+    r = await ce.post("/auth/login", json={"email": "typo@example.com", "password": "password123"})
+    check("verify: login says whether the account is verified", r.json()["email_verified"] is True, r.text)
+    await ce.aclose()
     # --- the trial itself
     r = await cn.post("/orders", json={"service_id": tsid, "link": "https://tiktok.com/@t/video/1", "quantity": 101})
     check("trial: more than 100 isn't free", r.status_code == 402, r.text)

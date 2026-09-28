@@ -1,7 +1,8 @@
 """Email verification with a 6-digit code (typed in, not a link: most customers sign up inside
 Facebook's in-app browser, where a link would open another browser that isn't logged in).
 
-Only the free trial needs a verified email. Codes last 15 minutes; one new code per minute and
+Every account needs a verified email before it can use the dashboard (enforced in
+security.current_user); existing accounts verify on their next login. Codes last 15 minutes; one new code per minute and
 5 per hour per account; 5 wrong tries and the code is dead. Codes are stored as an HMAC, never plain.
 """
 import hashlib
@@ -106,3 +107,18 @@ async def check_code(user_id: int, code: str) -> None:
             await db.execute("delete from email_codes where user_id = :u", {"u": user_id})
     if error:
         raise HTTPException(*error)
+
+
+async def change_email(user_id: int, email: str) -> dict:
+    """Fix a mistyped email before it's verified, then send a code to the new address."""
+    async with transaction() as db:
+        u = await db.fetch_one("select email_verified_at from users where id = :u for update", {"u": user_id})
+        if u["email_verified_at"]:
+            raise HTTPException(409, "Your email is already verified")
+        if await db.fetch_val("select 1 from users where lower(email) = lower(:e) and id <> :u", {"e": email, "u": user_id}):
+            raise HTTPException(409, "That email already has an account. Log in to it instead.")
+        await db.execute("update users set email = :e where id = :u", {"e": email.lower(), "u": user_id})
+        # the old code dies; the new address can get one straight away (the hourly cap still counts)
+        await db.execute("update email_codes set code_hash = '', sent_at = sent_at - interval '1 minute' where user_id = :u",
+                         {"u": user_id})
+    return await send_code(user_id)

@@ -590,7 +590,6 @@ function renderNew() {
 
   view.innerHTML = `
     <div class="page-head"><h1>New order</h1><a href="#support" style="font-weight:600;text-decoration:none">Need help?</a></div>
-    ${verifyBanner()}
     <div class="two-col">
       <form class="card panel primary" id="order-form" novalidate>
         <div class="field">
@@ -1211,102 +1210,6 @@ function renderFunds(params) {
   else loadTopups();
 }
 
-/* ----------------------------------------------------------- email verification */
-
-// The free trial needs a verified email: /auth/me → trial.needs_verify. A 6-digit code, typed in
-// (a link would open outside Facebook's in-app browser, where the customer isn't logged in).
-function verifyBanner() {
-  if (!state.user?.trial?.needs_verify || state.previewMode) return "";
-  return `<div class="alert alert-warn verify-banner" role="status">
-    <span class="grow"><strong>Verify your email to get your free trial.</strong> It takes a minute: we email you a 6-digit code.</span>
-    <button type="button" class="btn btn-primary btn-sm" data-verify>Verify email</button></div>`;
-}
-
-function showVerify({ intro = false } = {}) {
-  return new Promise((resolve) => {
-    const email = state.user?.email || "your email";
-    const root = document.createElement("div");
-    root.className = "bi vf";
-    root.innerHTML = `
-      <div class="bi-backdrop"></div>
-      <form class="bi-card" role="dialog" aria-modal="true" aria-labelledby="vf-title" tabindex="-1" novalidate>
-        <div class="bi-kicker" style="animation:none">${intro ? "One quick step" : "Free trial"}</div>
-        <h2 id="vf-title">Check your email</h2>
-        <p class="vf-text">We sent a 6-digit code to <strong>${esc(email)}</strong>. Enter it to unlock your free trial.</p>
-        <input class="input vf-code" id="vf-code" inputmode="numeric" autocomplete="one-time-code" maxlength="7"
-          placeholder="••••••" aria-label="6-digit code" required>
-        <div class="vf-msg" id="vf-msg" role="alert"></div>
-        <button type="submit" class="btn btn-primary btn-lg btn-block" id="vf-go">Verify</button>
-        <div class="vf-row">
-          <button type="button" class="btn btn-ghost btn-sm" id="vf-resend" disabled>Send a new code</button>
-          <button type="button" class="btn btn-ghost btn-sm" id="vf-later">Do it later</button>
-        </div>
-        <p class="hint" style="margin:2px 0 0">Can't find it? Check Spam or Promotions. It can take a minute.</p>
-      </form>`;
-    document.body.appendChild(root);
-    const $ = (id) => root.querySelector(`#${id}`);
-    const msg = (t, bad = true) => { $("vf-msg").textContent = t; $("vf-msg").classList.toggle("ok", !bad); };
-    let timer = null;
-    const countdown = (sec) => {
-      clearInterval(timer);
-      const btn = $("vf-resend");
-      let left = sec;
-      const paint = () => {
-        btn.disabled = left > 0;
-        btn.textContent = left > 0 ? `Send a new code (${left}s)` : "Send a new code";
-      };
-      paint();
-      timer = setInterval(() => { left -= 1; paint(); if (left <= 0) clearInterval(timer); }, 1000);
-    };
-    const send = async () => {
-      $("vf-resend").disabled = true;
-      try {
-        const r = await api("/auth/verify/send", { method: "POST" });
-        msg("Code sent.", false);
-        countdown(r.resend_in || 60);
-      } catch (e) {
-        const wait = /Wait (\d+) seconds/.exec(e.message || "");
-        if (wait) { msg("We just sent you a code. It still works.", false); countdown(Number(wait[1])); }   // sent a moment ago
-        else { msg(e.message); countdown(e.status === 429 ? 60 : 5); }
-      }
-    };
-    const close = (verified) => {
-      clearInterval(timer);
-      root.classList.add("bi-out");
-      setTimeout(() => { root.remove(); resolve(verified); }, 220);
-    };
-    root.querySelector("form").addEventListener("submit", async (ev) => {
-      ev.preventDefault();
-      const code = $("vf-code").value.replace(/\D/g, "");
-      if (code.length !== 6) { msg("Enter the 6 digits from the email."); $("vf-code").focus(); return; }
-      const go = $("vf-go");
-      go.disabled = true;
-      go.textContent = "Checking…";
-      try {
-        await api("/auth/verify", { method: "POST", body: { code } });
-        await refreshMe();
-        if (route().name === "new") renderNew();
-        toast("Email verified. Your free trial is unlocked.");
-        close(true);
-      } catch (e) {
-        msg(e.message);
-        go.disabled = false;
-        go.textContent = "Verify";
-        $("vf-code").select();
-      }
-    });
-    $("vf-code").addEventListener("input", (e) => {
-      if (e.target.value.replace(/\D/g, "").length === 6) root.querySelector("form").requestSubmit();
-    });
-    $("vf-resend").addEventListener("click", send);
-    $("vf-later").addEventListener("click", () => close(false));
-    send();
-    setTimeout(() => $("vf-code").focus({ preventScroll: true }), 300);
-  });
-}
-
-view.addEventListener("click", (e) => { if (e.target.closest("[data-verify]")) showVerify(); });
-
 /* ----------------------------------------------------------- welcome guide */
 
 // The free trial order (server-picked service, up to trial.quantity): /auth/me → trial
@@ -1399,6 +1302,8 @@ async function runWelcomeGuide({ preview, then }) {
     setTimeout(() => { throw e; });   // surfaces it to the error reporter in dashboard/index.html
     return;
   }
+  // a verified email is required: the code step lives on the login page
+  if (state.user.verify_required && !state.user.email_verified) { location.replace("/login/?verify=1"); return; }
   render();   // Orders and Add funds draw now; New order and Mass order draw when the list arrives
   window.__dashReady = true;
   if (new URLSearchParams(location.search).get("debug") === "1") setTimeout(showDebug, 3000);
@@ -1417,13 +1322,6 @@ async function runWelcomeGuide({ preview, then }) {
     const note = "Preview: this is what new customers see. Ordering is turned off.";
     runWelcomeGuide({ preview: true, then: () => showBadgeIntro("member", { note }) });
   }
-  else if (pending) {
-    const guide = () => runWelcomeGuide({ preview: false, then: () => { tierCardGate = true; maybeTierCard(); } });
-    let midGuide = false;
-    try { midGuide = !!localStorage.getItem("tourStep"); } catch { /* private mode */ }
-    // right after sign-up: verify first, so the guide can walk them through the free trial
-    if (state.user?.trial?.needs_verify && !midGuide) showVerify({ intro: true }).then(guide);
-    else guide();
-  }
+  else if (pending) runWelcomeGuide({ preview: false, then: () => { tierCardGate = true; maybeTierCard(); } });
   else { tierCardGate = true; maybeTierCard(); }
 })();

@@ -37,6 +37,10 @@ class CodeIn(BaseModel):
     code: str = Field(max_length=20)
 
 
+class EmailIn(BaseModel):
+    email: EmailStr
+
+
 class RegisterIn(Credentials):
     ref: str | None = Field(default=None, max_length=32)   # referral code from the signup link
 
@@ -81,7 +85,8 @@ async def login(body: Credentials, request: Request, response: Response, db: DB 
         raise HTTPException(401, "Wrong email or password")
     login_fails_email.reset(email)
     issue_session(response, user["id"])
-    return {"id": user["id"], "email": user["email"]}
+    verified = await db.fetch_val("select email_verified_at is not null from users where id = :u", {"u": user["id"]})
+    return {"id": user["id"], "email": user["email"], "email_verified": bool(verified), "verify_required": verify.required()}
 
 
 @router.post("/logout")
@@ -104,6 +109,14 @@ async def verify_send(user: dict = Depends(current_user)):
     if not verify.required():
         raise HTTPException(400, "Email verification isn't turned on")
     return await verify.send_code(user["id"])
+
+
+@router.post("/verify/email")
+async def verify_change_email(body: EmailIn, user: dict = Depends(current_user)):
+    """Mistyped email at sign-up: change it (only while unverified) and send a code there."""
+    if not verify.required():
+        raise HTTPException(400, "Email verification isn't turned on")
+    return {**await verify.change_email(user["id"], body.email), "email": body.email.lower()}
 
 
 @router.post("/verify")

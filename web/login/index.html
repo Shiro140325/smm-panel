@@ -40,6 +40,23 @@
       <div class="alert alert-bad hidden" id="auth-error" role="alert"></div>
       <button class="btn btn-primary btn-lg btn-block" id="submit" type="submit">Log in</button>
     </form>
+    <form class="vf-step hidden" id="verify-step" novalidate>
+      <h1>Check your email</h1>
+      <p class="vf-text">We sent a 6-digit code to <strong id="vf-email"></strong>. Enter it to finish setting up your account.</p>
+      <input class="input vf-code" id="vf-code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="••••••" aria-label="6-digit code">
+      <div class="vf-msg" id="vf-msg" role="alert"></div>
+      <button class="btn btn-primary btn-lg btn-block" id="vf-go" type="submit">Verify</button>
+      <div class="vf-row">
+        <button type="button" class="btn btn-ghost btn-sm" id="vf-resend" disabled>Send a new code</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="vf-change-open">Wrong email?</button>
+      </div>
+      <div class="vf-change hidden" id="vf-change">
+        <input class="input" id="vf-new-email" type="email" autocomplete="email" placeholder="Correct email">
+        <button type="button" class="btn btn-secondary" id="vf-change-go">Send code</button>
+      </div>
+      <p class="hint" style="margin:0;text-align:center">Can't find it? Check Spam or Promotions. It can take a minute.
+        <br><button type="button" class="btn btn-ghost btn-sm" id="vf-logout" style="margin-top:6px">Log out</button></p>
+    </form>
     <p class="hint" style="text-align:center">By continuing you agree to the <a href="/terms/">Terms of service</a> and <a href="/privacy/">Privacy policy</a>.</p>
   </div>
 </main>
@@ -68,8 +85,76 @@
   $("tab-register").onclick = () => setMode("register");
   setMode(mode);
 
-  // already logged in? go straight to the dashboard
-  api("/auth/me").then(() => location.replace("/dashboard/")).catch(() => {});
+  // already logged in? go straight to the dashboard (after the email code, if it's still needed)
+  api("/auth/me").then((me) => (me.verify_required && !me.email_verified ? showVerify(me.email) : location.replace("/dashboard/")))
+    .catch(() => {});
+
+  /* ---------- email code: required before the dashboard, for new and existing accounts */
+  let timer = null;
+  const msg = (t, ok = false) => { $("vf-msg").textContent = t; $("vf-msg").classList.toggle("ok", ok); };
+  function countdown(sec) {
+    clearInterval(timer);
+    let left = sec;
+    const paint = () => { $("vf-resend").disabled = left > 0; $("vf-resend").textContent = left > 0 ? `Send a new code (${left}s)` : "Send a new code"; };
+    paint();
+    timer = setInterval(() => { left -= 1; paint(); if (left <= 0) clearInterval(timer); }, 1000);
+  }
+  function sent(r) { msg("Code sent.", true); countdown(r.resend_in || 60); }
+  function sendFailed(e) {
+    const wait = /Wait (\d+) seconds/.exec(e.message || "");
+    if (wait) { msg("We just sent you a code. It still works.", true); countdown(Number(wait[1])); }
+    else { msg(e.message); countdown(e.status === 429 ? 60 : 5); }
+  }
+  async function send() {
+    $("vf-resend").disabled = true;
+    try { sent(await api("/auth/verify/send", { method: "POST" })); } catch (e) { sendFailed(e); }
+  }
+  function showVerify(email) {
+    document.querySelector(".tabs").classList.add("hidden");
+    $("auth-form").classList.add("hidden");
+    $("verify-step").classList.remove("hidden");
+    $("vf-email").textContent = email;
+    document.title = "Verify your email — SMM Shiro";
+    send();
+    setTimeout(() => $("vf-code").focus(), 100);
+  }
+  $("verify-step").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const code = $("vf-code").value.replace(/\D/g, "");
+    if (code.length !== 6) { msg("Enter the 6 digits from the email."); $("vf-code").focus(); return; }
+    $("vf-go").disabled = true;
+    $("vf-go").textContent = "Checking…";
+    try {
+      await api("/auth/verify", { method: "POST", body: { code } });
+      $("vf-go").textContent = "Verified";
+      location.replace("/dashboard/");
+    } catch (ex) {
+      msg(ex.message);
+      $("vf-go").disabled = false;
+      $("vf-go").textContent = "Verify";
+      $("vf-code").select();
+    }
+  });
+  $("vf-code").addEventListener("input", (e) => { if (e.target.value.replace(/\D/g, "").length === 6) $("verify-step").requestSubmit(); });
+  $("vf-resend").addEventListener("click", send);
+  $("vf-change-open").addEventListener("click", () => { $("vf-change").classList.toggle("hidden"); $("vf-new-email").focus(); });
+  $("vf-change-go").addEventListener("click", async () => {
+    const email = $("vf-new-email").value.trim();
+    if (!email) { $("vf-new-email").focus(); return; }
+    $("vf-change-go").disabled = true;
+    try {
+      const r = await api("/auth/verify/email", { method: "POST", body: { email } });
+      $("vf-email").textContent = r.email;
+      $("vf-change").classList.add("hidden");
+      $("vf-code").value = "";
+      sent(r);
+    } catch (e) { msg(e.message); }
+    $("vf-change-go").disabled = false;
+  });
+  $("vf-logout").addEventListener("click", async () => {
+    try { await api("/auth/logout", { method: "POST" }); } catch { /* ignore */ }
+    location.replace("/login/");
+  });
 
   $("auth-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -84,7 +169,8 @@
       const res = await api(mode === "login" ? "/auth/login" : "/auth/register", { method: "POST", body: mode === "register" && ref ? { email, password, ref } : { email, password } });
       // new account: the dashboard opens with the welcome guide (and the free trial order, when offered)
       if (mode === "register") { try { localStorage.setItem("tour", res.trial && (res.trial.available || res.trial.needs_verify) ? "trial" : "guide"); localStorage.removeItem("tourStep"); } catch { /* private mode */ } }
-      location.replace("/dashboard/");
+      if (res.verify_required && !res.email_verified) showVerify(res.email);
+      else location.replace("/dashboard/");
     } catch (ex) {
       err.textContent = ex.message;
       err.classList.remove("hidden");

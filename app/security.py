@@ -5,6 +5,7 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
 from fastapi import Depends, HTTPException, Request, Response
 
+from app import verify
 from app.config import get_settings
 from app.db import DB, get_db
 
@@ -37,6 +38,10 @@ def clear_session(response: Response) -> None:
     response.delete_cookie(COOKIE, path="/")
 
 
+VERIFY_FIRST = "Verify your email first"
+VERIFY_OPEN = {"/auth/me", "/auth/verify", "/auth/verify/send", "/auth/verify/email"}
+
+
 async def current_user(request: Request, db: DB = Depends(get_db)) -> dict:
     token = request.cookies.get(COOKIE)
     if not token:
@@ -46,11 +51,15 @@ async def current_user(request: Request, db: DB = Depends(get_db)) -> dict:
     except jwt.PyJWTError:
         raise HTTPException(401, "Session expired")
     user = await db.fetch_one(
-        "select id, email, is_admin from users where id = :id", {"id": int(payload["sub"])}
+        "select id, email, is_admin, email_verified_at is not null as verified from users where id = :id",
+        {"id": int(payload["sub"])}
     )
     if not user:
         raise HTTPException(401, "Not logged in")
-    return user
+    # a verified email is required for everything except the verification steps themselves
+    if not user["verified"] and request.url.path not in VERIFY_OPEN and verify.required():
+        raise HTTPException(403, VERIFY_FIRST)
+    return {"id": user["id"], "email": user["email"], "is_admin": user["is_admin"]}
 
 
 async def balance_of(db: DB, user_id: int) -> float:

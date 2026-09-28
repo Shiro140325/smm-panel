@@ -53,6 +53,8 @@ export async function api(path, { method = "GET", body } = {}) {
     const d = data && data.detail;
     if (typeof d === "string") msg = d;
     else if (Array.isArray(d) && d.length) msg = d.map((e) => String(e.msg || "").replace(/^Value error, /, "")).join(". ");
+    // the account still needs its email code (e.g. a dashboard left open when verification went live)
+    if (res.status === 403 && d === "Verify your email first" && location.pathname.startsWith("/dashboard")) location.replace("/login/?verify=1");
     throw new ApiError(msg, res.status);
   }
   return data;

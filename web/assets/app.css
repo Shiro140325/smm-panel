@@ -865,15 +865,14 @@ a.pill { text-decoration: none; }
   .tier-chip { margin-top: 6px; padding: 8px 10px; gap: 5px; }
 }
 
-/* email verification */
-.vf .bi-card { gap: 10px; }
-.vf .bi-card > * { animation: none; opacity: 1; }
-.vf .bi-card h2 { margin: 0; }
-.vf-text { margin: 0; color: var(--muted); line-height: 1.5; }
-.vf-text strong { color: var(--ink); word-break: break-all; }
+/* email verification (login page) */
+.vf-step { display: flex; flex-direction: column; gap: 14px; }
+.vf-step h1 { font-size: 24px; margin: 0; text-align: center; }
+.vf-text { margin: 0; color: var(--muted); line-height: 1.5; text-align: center; }
+.vf-text strong { color: var(--ink); overflow-wrap: anywhere; }
 .vf-code { font-family: var(--font-mono); font-size: 28px; letter-spacing: .35em; text-align: center; padding: 12px 8px; width: 100%; }
-.vf-msg { min-height: 20px; font-size: 14px; font-weight: 600; color: var(--bad); }
+.vf-msg { min-height: 20px; font-size: 14px; font-weight: 600; color: var(--bad); text-align: center; }
 .vf-msg.ok { color: var(--muted); font-weight: 500; }
-.vf-row { display: flex; justify-content: space-between; align-self: stretch; gap: 8px; flex-wrap: wrap; }
-.verify-banner { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
-.verify-banner .grow { flex: 1 1 240px; }
+.vf-row { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.vf-change { display: flex; gap: 8px; }
+.vf-change .input { flex: 1; min-width: 0; }
