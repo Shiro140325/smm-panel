@@ -1,12 +1,17 @@
 import logging
 import os
+import re
 import secrets
+from datetime import datetime, timedelta, timezone
+
+import jwt
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.exc import IntegrityError
 
 from app import verify
+from app.config import get_settings
 from app.db import DB, get_db, transaction
 from app.ratelimit import Limiter, client_ip
 from app.tiers import current_tier
@@ -84,9 +89,69 @@ async def login(body: Credentials, request: Request, response: Response, db: DB 
         log.warning("login failed for %s from %s", body.email.lower(), ip)
         raise HTTPException(401, "Wrong email or password")
     login_fails_email.reset(email)
-    issue_session(response, user["id"])
-    verified = await db.fetch_val("select email_verified_at is not null from users where id = :u", {"u": user["id"]})
-    return {"id": user["id"], "email": user["email"], "email_verified": bool(verified), "verify_required": verify.required()}
+    if not verify.required():
+        issue_session(response, user["id"])
+        return {"id": user["id"], "email": user["email"], "code_required": False}
+    # second step: a code emailed to the account; the session starts only after it
+    resend_in = int(verify.RESEND_GAP.total_seconds())
+    try:
+        await verify.issue_code(db, user["id"], "login", user["email"])
+    except HTTPException as e:   # a code went out under a minute ago: that one still works
+        wait = re.match(r"Wait (\d+) seconds", str(e.detail))
+        if not wait:
+            raise
+        resend_in = int(wait.group(1))
+    _set_pending(response, user["id"])
+    return {"code_required": True, "sent_to": _mask_to(user["email"]), "resend_in": resend_in}
+
+
+PENDING = "login_pending"
+PENDING_MINUTES = 15
+
+
+def _mask_to(email: str) -> str:
+    name, _, domain = email.partition("@")
+    return f"{name[:2]}{'•' * max(1, len(name) - 2)}@{domain}"
+
+
+def _set_pending(response: Response, user_id: int) -> None:
+    s = get_settings()
+    token = jwt.encode({"sub": str(user_id), "pl": 1, "exp": datetime.now(timezone.utc) + timedelta(minutes=PENDING_MINUTES)},
+                       s.jwt_secret, algorithm="HS256")
+    response.set_cookie(PENDING, token, httponly=True, secure=s.cookie_secure, samesite="lax",
+                        max_age=PENDING_MINUTES * 60, path="/auth")
+
+
+def _pending_user(request: Request) -> int:
+    try:
+        payload = jwt.decode(request.cookies.get(PENDING) or "", get_settings().jwt_secret, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        raise HTTPException(401, "Your login timed out. Enter your password again.")
+    if payload.get("pl") != 1:
+        raise HTTPException(401, "Your login timed out. Enter your password again.")
+    return int(payload["sub"])
+
+
+@router.post("/login/resend")
+async def login_resend(request: Request, db: DB = Depends(get_db)):
+    uid = _pending_user(request)
+    email = await db.fetch_val("select email from users where id = :u", {"u": uid})
+    await verify.issue_code(db, uid, "login", email)
+    return {"sent_to": _mask_to(email), "resend_in": int(verify.RESEND_GAP.total_seconds())}
+
+
+@router.post("/login/verify")
+async def login_verify(body: CodeIn, request: Request, response: Response):
+    """The emailed login code → the session. It also proves the email, so an unverified account is verified."""
+    uid = _pending_user(request)
+
+    async def apply(db, rows):
+        await db.execute("update users set email_verified_at = coalesce(email_verified_at, now()) where id = :u", {"u": uid})
+
+    await verify.use_codes(uid, {"login": body.code}, apply)
+    response.delete_cookie(PENDING, path="/auth")
+    issue_session(response, uid)
+    return {"ok": True}
 
 
 @router.post("/logout")

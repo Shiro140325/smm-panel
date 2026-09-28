@@ -125,10 +125,14 @@ async def change_email(user_id: int, email: str) -> dict:
 # Password change: a code to the account's email. Email change: one code to the current address and
 # one to the new address. Same limits as sign-up codes, per purpose.
 
-LABEL = {"password": "your email", "email_old": "your current email", "email_new": "your new email"}
+LABEL = {"login": "your email", "password": "your email", "email_old": "your current email", "email_new": "your new email"}
 
 
 def _settings_email(purpose: str, code: str, new_email: str | None) -> tuple[str, str, str]:
+    if purpose == "login":   # just the code, like the sign-up email
+        subject, body, _ = _email(code)
+        return (f"{code} is your SMM Shiro login code", body.replace("Your verification code:", "Your login code:"),
+                f"Your SMM Shiro login code is {code}")
     if purpose == "password":
         subject = f"{code} is your code to change your SMM Shiro password"
         lines = ["Someone (hopefully you) asked to change the password of your SMM Shiro account.",

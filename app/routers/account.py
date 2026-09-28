@@ -189,6 +189,8 @@ async def email_confirm(body: EmailConfirmIn, user: dict = Depends(current_user)
         if await db.fetch_val("select 1 from users where lower(email) = :e and id <> :u", {"e": new, "u": user["id"]}):
             raise HTTPException(409, "That email already has an account")
         await db.execute("update users set email = :e, email_verified_at = now() where id = :u", {"e": new, "u": user["id"]})
+        # a login code sent to the old address is useless now: the next login sends one to the new address
+        await db.execute("delete from account_codes where user_id = :u and purpose = 'login'", {"u": user["id"]})
         changed["email"] = new
 
     await verify.use_codes(user["id"], {"email_old": body.old_code, "email_new": body.new_code}, apply)

@@ -41,8 +41,8 @@
       <button class="btn btn-primary btn-lg btn-block" id="submit" type="submit">Log in</button>
     </form>
     <form class="vf-step hidden" id="verify-step" novalidate>
-      <h1>Check your email</h1>
-      <p class="vf-text">We sent a 6-digit code to <strong id="vf-email"></strong>. Enter it to finish setting up your account.</p>
+      <h1 id="vf-title">Check your email</h1>
+      <p class="vf-text">We sent a 6-digit code to <strong id="vf-email"></strong>. <span id="vf-tail">Enter it to finish setting up your account.</span></p>
       <input class="input vf-code" id="vf-code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="••••••" aria-label="6-digit code">
       <div class="vf-msg" id="vf-msg" role="alert"></div>
       <button class="btn btn-primary btn-lg btn-block" id="vf-go" type="submit">Verify</button>
@@ -105,9 +105,29 @@
     if (wait) { msg("We just sent you a code. It still works.", true); countdown(Number(wait[1])); }
     else { msg(e.message); countdown(e.status === 429 ? 60 : 5); }
   }
+  let codeMode = "verify";   // "verify": new/unverified account · "login": the code every login needs
   async function send() {
     $("vf-resend").disabled = true;
-    try { sent(await api("/auth/verify/send", { method: "POST" })); } catch (e) { sendFailed(e); }
+    try { sent(await api(codeMode === "login" ? "/auth/login/resend" : "/auth/verify/send", { method: "POST" })); }
+    catch (e) {
+      if (e.status === 401 && codeMode === "login") { msg(e.message); setTimeout(() => location.replace("/login/"), 1500); return; }
+      sendFailed(e);
+    }
+  }
+  function showLoginCode(res) {
+    codeMode = "login";
+    document.querySelector(".tabs").classList.add("hidden");
+    $("auth-form").classList.add("hidden");
+    $("verify-step").classList.remove("hidden");
+    $("vf-title").textContent = "Enter your login code";
+    $("vf-email").textContent = res.sent_to;
+    $("vf-tail").textContent = "Enter it to log in.";
+    $("vf-change-open").classList.add("hidden");
+    $("vf-logout").textContent = "Back";
+    document.title = "Login code — SMM Shiro";
+    msg("Code sent.", true);
+    countdown(res.resend_in || 60);
+    setTimeout(() => $("vf-code").focus(), 100);
   }
   function showVerify(email) {
     document.querySelector(".tabs").classList.add("hidden");
@@ -125,11 +145,12 @@
     $("vf-go").disabled = true;
     $("vf-go").textContent = "Checking…";
     try {
-      await api("/auth/verify", { method: "POST", body: { code } });
+      await api(codeMode === "login" ? "/auth/login/verify" : "/auth/verify", { method: "POST", body: { code } });
       $("vf-go").textContent = "Verified";
       location.replace("/dashboard/");
     } catch (ex) {
       msg(ex.message);
+      if (ex.status === 401 && codeMode === "login") { setTimeout(() => location.replace("/login/"), 1500); return; }
       $("vf-go").disabled = false;
       $("vf-go").textContent = "Verify";
       $("vf-code").select();
@@ -152,7 +173,7 @@
     $("vf-change-go").disabled = false;
   });
   $("vf-logout").addEventListener("click", async () => {
-    try { await api("/auth/logout", { method: "POST" }); } catch { /* ignore */ }
+    if (codeMode !== "login") try { await api("/auth/logout", { method: "POST" }); } catch { /* ignore */ }
     location.replace("/login/");
   });
 
@@ -169,7 +190,8 @@
       const res = await api(mode === "login" ? "/auth/login" : "/auth/register", { method: "POST", body: mode === "register" && ref ? { email, password, ref } : { email, password } });
       // new account: the dashboard opens with the welcome guide (and the free trial order, when offered)
       if (mode === "register") { try { localStorage.setItem("tour", res.trial && (res.trial.available || res.trial.needs_verify) ? "trial" : "guide"); localStorage.removeItem("tourStep"); } catch { /* private mode */ } }
-      if (res.verify_required && !res.email_verified) showVerify(res.email);
+      if (res.code_required) showLoginCode(res);
+      else if (res.verify_required && !res.email_verified) showVerify(res.email);
       else location.replace("/dashboard/");
     } catch (ex) {
       err.textContent = ex.message;

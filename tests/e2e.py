@@ -114,6 +114,20 @@ async def main():
         await c2.post("/auth/login", json={"email": "juan@example.com", "password": "wrongpass1"}, headers=ip("10.0.0.1"))
     r = await c2.post("/auth/login", json={"email": "juan@example.com", "password": "password123"}, headers=ip("10.0.0.2"))
     check("login: right password still works after 4 misses (and clears them)", r.status_code == 200, r.text)
+    check("login code: the password alone doesn't log you in", r.json().get("code_required") is True and "@example.com" in r.json()["sent_to"]
+          and (await c2.get("/auth/me")).status_code == 401, r.text)
+    lmail = (await httpx.AsyncClient(base_url=MOCK).get("/_emails", params={"to": "juan@example.com"})).json()[-1]
+    lcode = re.search(r"\b(\d{6})\b", lmail["text"]).group(1)
+    check("login code: emailed", "login code" in lmail["subject"], lmail["subject"])
+    r = await c2.post("/auth/login/verify", json={"code": f"{(int(lcode) + 1) % 1000000:06d}"}, headers=ip("10.0.0.2"))
+    check("login code: wrong code refused", r.status_code == 400 and "Wrong code" in r.text, r.text)
+    r = await c2.post("/auth/login/resend", headers=ip("10.0.0.2"))
+    check("login code: one new code per minute", r.status_code == 429, r.text)
+    r = await c2.post("/auth/login/verify", json={"code": lcode}, headers=ip("10.0.0.2"))
+    check("login code: right code logs you in", r.status_code == 200 and (await c2.get("/auth/me")).status_code == 200, r.text)
+    r = await httpx.AsyncClient(base_url=API).post("/auth/login/verify", json={"code": lcode})
+    check("login code: useless without the password step", r.status_code == 401, r.text)
+    c2.cookies.clear()
     for _ in range(5):
         await c2.post("/auth/login", json={"email": "juan@example.com", "password": "wrongpass1"}, headers=ip("10.0.0.1"))
     r = await c2.post("/auth/login", json={"email": "juan@example.com", "password": "password123"}, headers=ip("10.0.0.3"))
@@ -694,11 +708,16 @@ async def main():
     check("verify: the new address's code works", r.status_code == 200, r.text)
     r = await ce.post("/auth/verify/email", json={"email": "other2@example.com"})
     check("verify: email can't be changed once verified", r.status_code == 409, r.text)
-    r = await ce.post("/auth/login", json={"email": "typo@example.com", "password": "password123"})
-    check("verify: login says whether the account is verified", r.json()["email_verified"] is True, r.text)
+    cu = dev_client("u", "10.9.0.70")   # an unverified account: the login code verifies it too
+    await cu.post("/auth/login", json={"email": "dead@example.com", "password": "password123"})
+    r = await cu.post("/auth/login/verify", json={"code": await last_code("dead@example.com")})
+    check("login code: also verifies an unverified account", r.status_code == 200 and (await cu.get("/auth/me")).json()["email_verified"] is True, r.text)
+    await cu.aclose()
     # --- account settings: password change (current password + emailed code), other devices logged out
     other = dev_client("z", "10.9.0.7")
     await other.post("/auth/login", json={"email": "typo@example.com", "password": "password123"})
+    r = await other.post("/auth/login/verify", json={"code": await last_code("typo@example.com")})
+    check("login code: second device logged in", r.status_code == 200, r.text)
     await asyncio.sleep(1.1)   # sessions carry whole-second issue times
     r = await ce.post("/account/password/code", json={"current_password": "wrongpass1"})
     check("settings: password code needs the current password", r.status_code == 400 and "current password" in r.text, r.text)
