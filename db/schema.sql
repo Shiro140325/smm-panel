@@ -175,3 +175,18 @@ create table if not exists email_codes (
   sends_hour int not null default 1,       -- codes sent since hour_start
   hour_start timestamptz not null
 );
+
+-- One-time codes for account settings: purpose = password | email_old | email_new.
+create table if not exists account_codes (
+  user_id    bigint not null references users(id) on delete cascade,
+  purpose    text not null,
+  code_hash  text not null,
+  expires_at timestamptz not null,
+  attempts   int not null default 0,
+  sent_at    timestamptz not null,
+  sends_hour int not null default 1,
+  hour_start timestamptz not null,
+  new_email  text,                         -- email change: the address being confirmed
+  primary key (user_id, purpose)
+);
+alter table users add column if not exists password_changed_at timestamptz;   -- sessions from before it are logged out

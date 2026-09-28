@@ -27,7 +27,7 @@ def verify_password(pw: str, hashed: str) -> bool:
 def issue_session(response: Response, user_id: int) -> None:
     s = get_settings()
     exp = datetime.now(timezone.utc) + timedelta(hours=s.jwt_ttl_hours)
-    token = jwt.encode({"sub": str(user_id), "exp": exp}, s.jwt_secret, algorithm="HS256")
+    token = jwt.encode({"sub": str(user_id), "exp": exp, "iat": datetime.now(timezone.utc)}, s.jwt_secret, algorithm="HS256")
     response.set_cookie(
         COOKIE, token, httponly=True, secure=s.cookie_secure, samesite="lax",
         max_age=s.jwt_ttl_hours * 3600, path="/",
@@ -51,11 +51,14 @@ async def current_user(request: Request, db: DB = Depends(get_db)) -> dict:
     except jwt.PyJWTError:
         raise HTTPException(401, "Session expired")
     user = await db.fetch_one(
-        "select id, email, is_admin, email_verified_at is not null as verified from users where id = :id",
+        "select id, email, is_admin, email_verified_at is not null as verified, password_changed_at from users where id = :id",
         {"id": int(payload["sub"])}
     )
     if not user:
         raise HTTPException(401, "Not logged in")
+    # a password change logs out every session started before it (the device that changed it gets a new one)
+    if user["password_changed_at"] and payload.get("iat", 0) < int(user["password_changed_at"].timestamp()):
+        raise HTTPException(401, "Your password was changed. Log in again.")
     # a verified email is required for everything except the verification steps themselves
     if not user["verified"] and request.url.path not in VERIFY_OPEN and verify.required():
         raise HTTPException(403, VERIFY_FIRST)

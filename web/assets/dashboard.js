@@ -153,7 +153,7 @@ async function maybeTierCard() {
   tierCardOpen = false;
 }
 
-const ROUTES = ["new", "mass", "orders", "funds", "recent", "support", "affiliate", "api", "more"];
+const ROUTES = ["new", "mass", "orders", "funds", "recent", "support", "affiliate", "api", "settings", "more"];
 const MORE = ["more", "recent", "support", "affiliate", "api"];   // on phones these sit behind the "More" tab
 
 function route() {
@@ -181,6 +181,7 @@ function render() {
   else if (name === "recent") renderRecent();
   else if (name === "affiliate") renderAffiliate();
   else if (name === "api") renderApi();
+  else if (name === "settings") renderSettings();
   else if (name === "more") renderMore();
   else renderFunds(params);
   window.scrollTo(0, 0);
@@ -215,6 +216,7 @@ function renderMore() {
       ${item("#recent", "done", "Recently completed", "Orders just delivered for other customers")}
       ${item("#affiliate", "gift", "Affiliate", "Earn credit when friends top up")}
       ${item("#api", "code", "API", "Resell our services from your own panel")}
+      ${item("#settings", "user", "Account settings", "Change your email or password")}
       ${item("#support", "chat", "Support", "support@smmshiro.com")}
     </div>`;
   view.querySelector("[data-more-tier]")?.addEventListener("click", () => showBadgeIntro(state.user.tier.name));
@@ -270,6 +272,148 @@ async function renderRecent() {
 }
 
 /* ------------------------------------------------------------ affiliate */
+
+/* ------------------------------------------------------------ account settings */
+
+// Email change: a code to the current address and one to the new address, both required.
+// Password change: current password, then a code to the email. Other devices get logged out.
+async function renderSettings() {
+  view.innerHTML = `<div class="page-head"><h1>Account settings</h1></div><p class="muted">Loading…</p>`;
+  let s;
+  try { s = await api("/account/settings"); } catch (e) { view.querySelector("p").textContent = e.message; return; }
+  if (route().name !== "settings") return;
+  view.innerHTML = `
+    <div class="page-head"><h1>Account settings</h1></div>
+    <div class="settings-grid">
+      <section class="card panel set-card">
+        <h3>Email</h3>
+        <div class="set-current"><strong>${esc(s.email)}</strong> <span class="badge badge-completed">Verified</span></div>
+        <p class="hint" style="margin:0">Receipts, codes and account notices go here. Member since ${fmtDate(s.created_at)}.</p>
+        <button type="button" class="btn btn-secondary" id="em-open">Change email</button>
+        <form class="set-form hidden" id="em-form" novalidate>
+          <div id="em-step1" class="set-form">
+            <div class="field"><label for="em-new">New email</label>
+              <input class="input" id="em-new" type="email" autocomplete="email" required></div>
+            <button type="submit" class="btn btn-primary" id="em-send">Send codes</button>
+          </div>
+          <div id="em-step2" class="set-form hidden">
+            <p class="set-note" id="em-note"></p>
+            <div class="field"><label for="em-old-code">Code sent to your current email</label>
+              <input class="input set-code" id="em-old-code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="••••••"></div>
+            <div class="field"><label for="em-new-code">Code sent to your new email</label>
+              <input class="input set-code" id="em-new-code" inputmode="numeric" maxlength="7" placeholder="••••••"></div>
+            <button type="submit" class="btn btn-primary" id="em-confirm">Change email</button>
+            <div class="set-row"><button type="button" class="btn btn-ghost btn-sm" id="em-resend" disabled>Send new codes</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="em-cancel">Cancel</button></div>
+          </div>
+          <div class="set-msg" id="em-msg" role="alert"></div>
+        </form>
+      </section>
+      <section class="card panel set-card">
+        <h3>Password</h3>
+        <p class="hint" style="margin:0">${s.password_changed_at ? `Last changed ${fmtDate(s.password_changed_at)}.` : "Use at least 8 characters. Don't reuse a password from another site."}</p>
+        <form class="set-form" id="pw-form" novalidate>
+          <div class="field"><label for="pw-cur">Current password</label>
+            <input class="input" id="pw-cur" type="password" autocomplete="current-password" required></div>
+          <div class="field"><label for="pw-new">New password</label>
+            <input class="input" id="pw-new" type="password" autocomplete="new-password" minlength="8" required></div>
+          <div class="field"><label for="pw-new2">Repeat new password</label>
+            <input class="input" id="pw-new2" type="password" autocomplete="new-password" minlength="8" required></div>
+          <div id="pw-step2" class="set-form hidden">
+            <p class="set-note" id="pw-note"></p>
+            <div class="field"><label for="pw-code">Code from the email</label>
+              <input class="input set-code" id="pw-code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="••••••"></div>
+          </div>
+          <button type="submit" class="btn btn-primary" id="pw-go">Send code to my email</button>
+          <div class="set-row hidden" id="pw-row"><button type="button" class="btn btn-ghost btn-sm" id="pw-resend" disabled>Send a new code</button></div>
+          <div class="set-msg" id="pw-msg" role="alert"></div>
+        </form>
+        <p class="hint" style="margin:0">Changing your password logs you out on every other device.</p>
+      </section>
+    </div>`;
+  const $ = (id) => document.getElementById(id);
+  const digits = (id) => $(id).value.replace(/\D/g, "");
+  const say = (id, text, ok = false) => { $(id).textContent = text; $(id).classList.toggle("ok", ok); };
+  const timers = {};
+  const countdown = (id, sec, label) => {
+    clearInterval(timers[id]);
+    let left = sec;
+    const paint = () => { if (!$(id)) return clearInterval(timers[id]); $(id).disabled = left > 0; $(id).textContent = left > 0 ? `${label} (${left}s)` : label; };
+    paint();
+    timers[id] = setInterval(() => { left -= 1; paint(); if (left <= 0) clearInterval(timers[id]); }, 1000);
+  };
+  const busy = (id, on, text) => { $(id).disabled = on; if (text) $(id).textContent = text; };
+
+  /* email */
+  let emStep = 1;
+  $("em-open").addEventListener("click", () => { $("em-open").classList.add("hidden"); $("em-form").classList.remove("hidden"); $("em-new").focus(); });
+  const emSend = async () => {
+    const email = $("em-new").value.trim();
+    if (!email) { say("em-msg", "Enter the new email."); $("em-new").focus(); return; }
+    busy("em-send", true, "Sending…");
+    try {
+      const r = await api("/account/email/start", { method: "POST", body: { new_email: email } });
+      emStep = 2;
+      $("em-step1").classList.add("hidden");
+      $("em-step2").classList.remove("hidden");
+      $("em-note").innerHTML = `We sent a code to your current email (<strong>${esc(r.old_to)}</strong>) and another to <strong>${esc(r.new_to)}</strong>. Enter both. Can't find them? Check Spam.`;
+      say("em-msg", "");
+      countdown("em-resend", r.resend_in, "Send new codes");
+      $("em-old-code").focus();
+    } catch (e) { say("em-msg", e.message); }
+    busy("em-send", false, "Send codes");
+  };
+  $("em-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    if (emStep === 1) return emSend();
+    if (digits("em-old-code").length !== 6 || digits("em-new-code").length !== 6) { say("em-msg", "Enter both 6-digit codes."); return; }
+    busy("em-confirm", true, "Checking…");
+    try {
+      const r = await api("/account/email", { method: "POST", body: { old_code: digits("em-old-code"), new_code: digits("em-new-code") } });
+      toast(`Email changed to ${r.email}`);
+      await refreshMe();
+      renderSettings();
+    } catch (e) { say("em-msg", e.message); busy("em-confirm", false, "Change email"); }
+  });
+  $("em-resend").addEventListener("click", () => { emStep = 1; emSend(); });
+  $("em-cancel").addEventListener("click", () => renderSettings());
+
+  /* password */
+  let pwStep = 1;
+  const pwSend = async () => {
+    const cur = $("pw-cur").value, nw = $("pw-new").value;
+    if (!cur) { say("pw-msg", "Enter your current password."); $("pw-cur").focus(); return; }
+    if (nw.length < 8) { say("pw-msg", "The new password needs at least 8 characters."); $("pw-new").focus(); return; }
+    if (nw !== $("pw-new2").value) { say("pw-msg", "The new passwords don't match."); $("pw-new2").focus(); return; }
+    if (nw === cur) { say("pw-msg", "The new password is the same as the current one."); return; }
+    busy("pw-go", true, "Sending…");
+    try {
+      const r = await api("/account/password/code", { method: "POST", body: { current_password: cur } });
+      pwStep = 2;
+      $("pw-step2").classList.remove("hidden");
+      $("pw-row").classList.remove("hidden");
+      $("pw-note").innerHTML = `We sent a code to <strong>${esc(r.sent_to)}</strong>. Can't find it? Check Spam.`;
+      say("pw-msg", "");
+      countdown("pw-resend", r.resend_in, "Send a new code");
+      busy("pw-go", false, "Change password");
+      $("pw-code").focus();
+    } catch (e) { say("pw-msg", e.message); busy("pw-go", false, pwStep === 1 ? "Send code to my email" : "Change password"); }
+  };
+  $("pw-form").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    if (pwStep === 1) return pwSend();
+    if (digits("pw-code").length !== 6) { say("pw-msg", "Enter the 6-digit code from the email."); $("pw-code").focus(); return; }
+    if ($("pw-new").value !== $("pw-new2").value) { say("pw-msg", "The new passwords don't match."); return; }
+    busy("pw-go", true, "Changing…");
+    try {
+      await api("/account/password", { method: "POST", body: {
+        current_password: $("pw-cur").value, new_password: $("pw-new").value, code: digits("pw-code") } });
+      toast("Password changed. Other devices were logged out.");
+      renderSettings();
+    } catch (e) { say("pw-msg", e.message); busy("pw-go", false, "Change password"); }
+  });
+  $("pw-resend").addEventListener("click", () => { pwSend(); });
+}
 
 async function renderAffiliate() {
   view.innerHTML = `<div class="page-head"><h1>Affiliate</h1></div><p class="muted">Loading…</p>`;
