@@ -190,3 +190,16 @@ create table if not exists account_codes (
   primary key (user_id, purpose)
 );
 alter table users add column if not exists password_changed_at timestamptz;   -- sessions from before it are logged out
+
+-- Admin panel authenticator (TOTP). One row; confirmed_at is set once the owner scanned it and entered a code.
+create table if not exists admin_totp (
+  id           int primary key default 1 check (id = 1),
+  secret       text not null,
+  confirmed_at timestamptz,
+  last_step    bigint,                   -- last accepted 30-second step: a code can't be used twice
+  created_at   timestamptz not null default now()
+);
+create table if not exists admin_backup_codes (
+  code_hash text primary key,            -- HMAC of a one-time backup code
+  used_at   timestamptz
+);

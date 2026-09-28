@@ -34,18 +34,26 @@ const debounce = (fn, ms = 300) => { let t; return (...a) => { clearTimeout(t); 
 
 async function start() {
   try {
-    await api("/admin/api/me");
-    showPanel();
+    const me = await api("/admin/api/me");
+    if (me.setup_required) showSetup(); else showPanel();
   } catch (e) {
     showLogin(e.status === 503 ? e.message : "");
   }
 }
 
+function showOnly(id) {
+  for (const x of ["login", "setup", "panel"]) $(x).classList.toggle("hidden", x !== id);
+  $("login-theme").classList.toggle("hidden", id === "panel");
+}
+
 function showLogin(notice) {
-  $("panel").classList.add("hidden");
-  $("login").classList.remove("hidden");
-  $("login-theme").classList.remove("hidden");
+  showOnly("login");
+  let step = "password";
+  $("code-field").classList.add("hidden");
+  $("admin-pass").closest(".field").classList.remove("hidden");
+  $("login-btn").textContent = "Open control panel";
   const err = $("login-error");
+  err.classList.add("hidden");
   if (notice) { err.textContent = notice; err.classList.remove("hidden"); }
   $("admin-pass").focus();
   $("login-form").onsubmit = async (ev) => {
@@ -54,21 +62,73 @@ function showLogin(notice) {
     btn.disabled = true;
     err.classList.add("hidden");
     try {
-      await api("/admin/api/login", { method: "POST", body: { password: $("admin-pass").value } });
-      $("admin-pass").value = "";
-      showPanel();
+      if (step === "password") {
+        const r = await api("/admin/api/login", { method: "POST", body: { password: $("admin-pass").value } });
+        $("admin-pass").value = "";
+        if (r.totp_required) {   // step 2: the authenticator code
+          step = "code";
+          $("admin-pass").closest(".field").classList.add("hidden");
+          $("code-field").classList.remove("hidden");
+          btn.textContent = "Verify";
+          $("admin-code").value = "";
+          $("admin-code").focus();
+        } else if (r.setup_required) showSetup();
+        else showPanel();
+      } else {
+        await api("/admin/api/login/totp", { method: "POST", body: { code: $("admin-code").value.trim() } });
+        $("admin-code").value = "";
+        showPanel();
+      }
     } catch (e) {
       err.textContent = e.message;
       err.classList.remove("hidden");
+      if (step === "code" && e.status === 401 && /timed out/.test(e.message)) setTimeout(() => showLogin(e.message), 1200);
+      else if (step === "code") $("admin-code").select();
     }
     btn.disabled = false;
   };
 }
 
+async function showSetup() {
+  showOnly("setup");
+  $("setup-step1").classList.remove("hidden");
+  $("setup-step2").classList.add("hidden");
+  const err = $("setup-error");
+  err.classList.add("hidden");
+  let d;
+  try { d = await api("/admin/api/totp/setup"); } catch (e) {
+    if (e.status === 401) return showLogin(e.message);
+    err.textContent = e.message; err.classList.remove("hidden"); return;
+  }
+  $("setup-qr").innerHTML = d.qr_svg;
+  $("setup-open").href = d.uri;
+  $("setup-key").textContent = d.secret;
+  $("setup-copy").onclick = async () => { try { await navigator.clipboard.writeText(d.secret.replace(/ /g, "")); toast("Key copied"); } catch { toast(d.secret); } };
+  $("setup-form").onsubmit = async (ev) => {
+    ev.preventDefault();
+    err.classList.add("hidden");
+    $("setup-go").disabled = true;
+    try {
+      const r = await api("/admin/api/totp/setup", { method: "POST", body: { code: $("setup-code").value.trim() } });
+      $("setup-step1").classList.add("hidden");
+      $("setup-step2").classList.remove("hidden");
+      $("setup-backups").innerHTML = r.backup_codes.map((c) => `<code>${esc(c)}</code>`).join("");
+      $("setup-copy-backups").onclick = async () => {
+        const text = "SMM Shiro control panel backup codes (each works once):\n" + r.backup_codes.join("\n");
+        try { await navigator.clipboard.writeText(text); toast("Backup codes copied"); } catch { toast("Copy them by hand"); }
+      };
+      $("setup-saved").checked = false;
+      $("setup-done").disabled = true;
+      $("setup-saved").onchange = () => { $("setup-done").disabled = !$("setup-saved").checked; };
+      $("setup-done").onclick = () => showPanel();
+    } catch (e) { err.textContent = e.message; err.classList.remove("hidden"); $("setup-code").select(); }
+    $("setup-go").disabled = false;
+  };
+  $("setup-code").focus();
+}
+
 function showPanel() {
-  $("login").classList.add("hidden");
-  $("login-theme").classList.add("hidden");
-  $("panel").classList.remove("hidden");
+  showOnly("panel");
   render();
 }
 
@@ -82,6 +142,7 @@ async function call(path, opts) {
     return stale() ? new Promise(() => {}) : r;
   } catch (e) {
     if (e.status === 401) showLogin("Your session ended. Sign in again.");
+    if (e.status === 403 && /authenticator/.test(e.message)) showSetup();
     if (stale()) return new Promise(() => {});
     throw e;
   }

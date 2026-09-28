@@ -3,9 +3,11 @@
 Separate from customer accounts: its own short-lived cookie scoped to /admin, SameSite=Strict
 (so no other site can make the browser send it), and a per-IP lockout after repeated wrong passwords.
 """
+import hashlib
 import hmac
 import logging
 import os
+import secrets
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -13,7 +15,7 @@ import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from app import announcement, fx, tiers
+from app import announcement, fx, tiers, totp
 from app.config import get_settings
 from app.db import DB, get_db
 from app.providers.smm_client import SMMClient
@@ -37,7 +39,16 @@ def _admin_pass() -> str:
 _ip = client_ip
 
 
-def require_admin(request: Request) -> None:
+PENDING = "admin_pending"
+PENDING_SECONDS = 5 * 60
+SETUP_OPEN = {"/admin/api/me", "/admin/api/totp/setup"}
+
+
+async def _totp_row(db):
+    return await db.fetch_one("select secret, confirmed_at, last_step from admin_totp where id = 1")
+
+
+async def require_admin(request: Request, db: DB = Depends(get_db)) -> None:
     if not _admin_pass():
         raise HTTPException(503, "Admin panel is off: set ADMIN_PASS on the server")
     token = request.cookies.get(COOKIE)
@@ -49,6 +60,32 @@ def require_admin(request: Request) -> None:
         raise HTTPException(401, "Session expired")
     if payload.get("adm") != 1:
         raise HTTPException(401, "Not logged in")
+    row = await _totp_row(db)
+    if row and row["confirmed_at"]:
+        if payload.get("mfa") != 1:   # a session from before the authenticator was set up
+            raise HTTPException(401, "Log in again with your authenticator code")
+    elif request.url.path not in SETUP_OPEN:
+        raise HTTPException(403, "Set up the authenticator first")
+
+
+def _session(response: Response, mfa: bool) -> None:
+    s = get_settings()
+    token = jwt.encode({"adm": 1, "mfa": 1 if mfa else 0, "exp": datetime.now(timezone.utc) + timedelta(hours=TTL_HOURS)},
+                       s.jwt_secret, algorithm="HS256")
+    response.set_cookie(COOKIE, token, httponly=True, secure=s.cookie_secure, samesite="strict",
+                        max_age=TTL_HOURS * 3600, path="/admin")
+
+
+def _locked(ip: str, now: float) -> list[float]:
+    recent = [t for t in _fails.get(ip, []) if now - t < LOCK_SECONDS]
+    if len(recent) >= MAX_FAILS:
+        raise HTTPException(429, "Too many wrong tries. Try again in 15 minutes.")
+    return recent
+
+
+def _backup_hash(code: str) -> str:
+    norm = "".join(ch for ch in code.lower() if ch.isalnum())
+    return hmac.new(get_settings().jwt_secret.encode(), f"admin-backup:{norm}".encode(), hashlib.sha256).hexdigest()
 
 
 class LoginIn(BaseModel):
@@ -56,26 +93,108 @@ class LoginIn(BaseModel):
 
 
 @router.post("/login")
-async def login(body: LoginIn, request: Request, response: Response):
+async def login(body: LoginIn, request: Request, response: Response, db: DB = Depends(get_db)):
+    """Step 1: the admin password. Then the authenticator code (or, before it's set up, the setup screen)."""
     expected = _admin_pass()
     if not expected:
         raise HTTPException(503, "Admin panel is off: set ADMIN_PASS on the server")
     ip, now = _ip(request), time.time()
-    recent = [t for t in _fails.get(ip, []) if now - t < LOCK_SECONDS]
-    if len(recent) >= MAX_FAILS:
-        raise HTTPException(429, "Too many wrong passwords. Try again in 15 minutes.")
+    recent = _locked(ip, now)
     if not hmac.compare_digest(body.password.encode(), expected.encode()):
         _fails[ip] = recent + [now]
         log.warning("admin login failed from %s", ip)
         raise HTTPException(401, "Wrong password")
+    row = await _totp_row(db)
+    if row and row["confirmed_at"]:
+        s = get_settings()
+        token = jwt.encode({"admp": 1, "exp": datetime.now(timezone.utc) + timedelta(seconds=PENDING_SECONDS)},
+                           s.jwt_secret, algorithm="HS256")
+        response.set_cookie(PENDING, token, httponly=True, secure=s.cookie_secure, samesite="strict",
+                            max_age=PENDING_SECONDS, path="/admin")
+        return {"totp_required": True}
     _fails.pop(ip, None)
-    s = get_settings()
-    token = jwt.encode({"adm": 1, "exp": datetime.now(timezone.utc) + timedelta(hours=TTL_HOURS)},
-                       s.jwt_secret, algorithm="HS256")
-    response.set_cookie(COOKIE, token, httponly=True, secure=s.cookie_secure, samesite="strict",
-                        max_age=TTL_HOURS * 3600, path="/admin")
+    _session(response, mfa=False)   # only the setup screen opens with this
+    log.info("admin login (authenticator not set up yet) from %s", ip)
+    return {"ok": True, "setup_required": True}
+
+
+class CodeIn(BaseModel):
+    code: str = Field(max_length=20)
+
+
+@router.post("/login/totp")
+async def login_totp(body: CodeIn, request: Request, response: Response, db: DB = Depends(get_db)):
+    """Step 2: the 6-digit code from the authenticator app, or a one-time backup code."""
+    try:
+        payload = jwt.decode(request.cookies.get(PENDING) or "", get_settings().jwt_secret, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        raise HTTPException(401, "Your login timed out. Enter the password again.")
+    if payload.get("admp") != 1:
+        raise HTTPException(401, "Your login timed out. Enter the password again.")
+    ip, now = _ip(request), time.time()
+    recent = _locked(ip, now)
+    row = await db.fetch_one("select secret, confirmed_at, last_step from admin_totp where id = 1 for update")
+    ok = False
+    if row and row["confirmed_at"]:
+        digits = "".join(ch for ch in body.code if ch.isdigit())
+        if len(digits) == totp.DIGITS and len(body.code.strip()) <= 7:
+            step = totp.check(row["secret"], digits, row["last_step"])
+            if step is not None:
+                await db.execute("update admin_totp set last_step = :s where id = 1", {"s": step})
+                ok = True
+        else:   # a backup code, used once
+            used = await db.fetch_val("update admin_backup_codes set used_at = now() where code_hash = :h and used_at is null "
+                                      "returning code_hash", {"h": _backup_hash(body.code)})
+            if used:
+                ok = True
+                log.warning("admin logged in with a backup code from %s", ip)
+    if not ok:
+        _fails[ip] = recent + [now]
+        log.warning("admin authenticator code wrong from %s", ip)
+        raise HTTPException(401, "Wrong code")
+    _fails.pop(ip, None)
+    response.delete_cookie(PENDING, path="/admin")
+    _session(response, mfa=True)
     log.info("admin login from %s", ip)
     return {"ok": True}
+
+
+@router.get("/totp/setup", dependencies=[Depends(require_admin)])
+async def totp_setup(db: DB = Depends(get_db)):
+    """The key to add to an authenticator app (kept until confirmed, so a reload shows the same one)."""
+    row = await _totp_row(db)
+    if row and row["confirmed_at"]:
+        raise HTTPException(409, "The authenticator is already set up")
+    secret = row["secret"] if row else totp.new_secret()
+    if not row:
+        await db.execute("insert into admin_totp (id, secret) values (1, :s)", {"s": secret})
+    uri = totp.otpauth_uri(secret)
+    return {"secret": " ".join(secret[i:i + 4] for i in range(0, len(secret), 4)), "uri": uri, "qr_svg": totp.qr_svg(uri)}
+
+
+BACKUP_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
+
+
+@router.post("/totp/setup", dependencies=[Depends(require_admin)])
+async def totp_confirm(body: CodeIn, response: Response, db: DB = Depends(get_db)):
+    """Confirm with a code from the app. Returns 8 one-time backup codes, shown only now."""
+    row = await db.fetch_one("select secret, confirmed_at from admin_totp where id = 1 for update")
+    if not row:
+        raise HTTPException(400, "Open the setup first")
+    if row["confirmed_at"]:
+        raise HTTPException(409, "The authenticator is already set up")
+    step = totp.check(row["secret"], body.code)
+    if step is None:
+        raise HTTPException(400, "That code doesn't match. Check the app shows SMM Shiro and try the newest code.")
+    await db.execute("update admin_totp set confirmed_at = now(), last_step = :s where id = 1", {"s": step})
+    codes = ["".join(secrets.choice(BACKUP_ALPHABET) for _ in range(4)) + "-" +
+             "".join(secrets.choice(BACKUP_ALPHABET) for _ in range(4)) for _ in range(8)]
+    await db.execute("delete from admin_backup_codes")
+    for c in codes:
+        await db.execute("insert into admin_backup_codes (code_hash) values (:h)", {"h": _backup_hash(c)})
+    _session(response, mfa=True)
+    log.info("admin authenticator set up")
+    return {"backup_codes": codes}
 
 
 @router.post("/logout")
@@ -85,8 +204,11 @@ async def logout(response: Response):
 
 
 @router.get("/me", dependencies=[Depends(require_admin)])
-async def me():
-    return {"ok": True}
+async def me(db: DB = Depends(get_db)):
+    row = await _totp_row(db)
+    enrolled = bool(row and row["confirmed_at"])
+    backups = await db.fetch_val("select count(*) from admin_backup_codes where used_at is null") if enrolled else 0
+    return {"ok": True, "setup_required": not enrolled, "backup_codes_left": backups}
 
 
 @router.get("/overview", dependencies=[Depends(require_admin)])

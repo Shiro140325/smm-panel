@@ -27,8 +27,44 @@
       <label for="admin-pass">Admin password</label>
       <input class="input" id="admin-pass" type="password" autocomplete="current-password" required>
     </div>
+    <div class="field hidden" id="code-field">
+      <label for="admin-code">Code from your authenticator app</label>
+      <input class="input vf-code" id="admin-code" inputmode="numeric" autocomplete="one-time-code" maxlength="9" placeholder="••••••">
+      <span class="hint">Lost your phone? Enter one of your backup codes instead.</span>
+    </div>
     <div class="alert alert-bad hidden" id="login-error" role="alert"></div>
     <button class="btn btn-primary btn-lg btn-block" type="submit" id="login-btn">Open control panel</button>
+  </form>
+</main>
+
+<!-- authenticator setup (once) -->
+<main class="auth-page hidden" id="setup">
+  <form class="card auth-card setup-card" id="setup-form" novalidate>
+    <div style="text-align:center"><span class="kicker">Control panel · one-time setup</span></div>
+    <h1 style="margin:0;text-align:center;font-size:24px">Set up your authenticator</h1>
+    <div id="setup-step1" class="setup-body">
+      <ol class="setup-steps">
+        <li>Open an authenticator app: Google Authenticator, Microsoft Authenticator, or the <strong>Passwords</strong> app on iPhone and iPad.</li>
+        <li>Scan this code with it, or tap <strong>Open in authenticator app</strong> if the app is on this device.</li>
+        <li>Type the 6-digit code it shows.</li>
+      </ol>
+      <div class="setup-qr" id="setup-qr" aria-label="QR code for the authenticator app"></div>
+      <a class="btn btn-secondary btn-block" id="setup-open" href="#">Open in authenticator app</a>
+      <div class="field"><span class="label">Or enter this key by hand</span>
+        <div class="setup-key"><code id="setup-key"></code><button type="button" class="btn btn-ghost btn-sm" id="setup-copy">Copy</button></div></div>
+      <div class="field"><label for="setup-code">6-digit code from the app</label>
+        <input class="input vf-code" id="setup-code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" placeholder="••••••"></div>
+      <div class="alert alert-bad hidden" id="setup-error" role="alert"></div>
+      <button class="btn btn-primary btn-lg btn-block" type="submit" id="setup-go">Turn on</button>
+    </div>
+    <div id="setup-step2" class="setup-body hidden">
+      <div class="alert alert-info" role="status">The authenticator is on. From now on the control panel asks for its code after the password.</div>
+      <p style="margin:0"><strong>Save these backup codes</strong> somewhere safe, like your notes or a password manager. Each works once if you lose the device with the app. They won't be shown again.</p>
+      <div class="setup-backups" id="setup-backups"></div>
+      <button type="button" class="btn btn-secondary btn-block" id="setup-copy-backups">Copy all</button>
+      <label class="check"><input type="checkbox" id="setup-saved"> I saved my backup codes</label>
+      <button type="button" class="btn btn-primary btn-lg btn-block" id="setup-done" disabled>Open control panel</button>
+    </div>
   </form>
 </main>
 

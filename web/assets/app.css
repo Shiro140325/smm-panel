@@ -892,3 +892,15 @@ a.pill { text-decoration: none; }
 .set-msg { min-height: 20px; font-size: 14px; font-weight: 600; color: var(--bad); }
 .set-msg:empty { min-height: 0; }
 .set-msg.ok { color: var(--muted); font-weight: 500; }
+
+/* admin authenticator setup */
+.setup-card { width: min(460px, 100%); }
+.setup-body { display: flex; flex-direction: column; gap: 14px; }
+.setup-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; line-height: 1.5; color: var(--muted); }
+.setup-steps strong { color: var(--ink); }
+.setup-qr { align-self: center; background: #fff; border-radius: 12px; padding: 6px; line-height: 0; }
+.setup-qr svg { width: 220px; height: 220px; }
+.setup-key { display: flex; align-items: center; gap: 8px; background: var(--field, var(--line)); border-radius: 10px; padding: 8px 10px; }
+.setup-key code { flex: 1; font-family: var(--font-mono); font-size: 14px; overflow-wrap: anywhere; }
+.setup-backups { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.setup-backups code { font-family: var(--font-mono); font-size: 16px; text-align: center; padding: 10px; border: 1px dashed var(--line); border-radius: 10px; }
