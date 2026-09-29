@@ -316,12 +316,13 @@ async def main():
     check("cancelling a paid top-up credits it instead", r.json().get("status") == "credited" and round(bal_c - bal_b, 2) == 120, (r.text, bal_b, bal_c))
 
     t5, _ = await new_topup(130)
-    await sql("update topups set created_at = now() - interval '11 minutes' where id = CAST(:id AS uuid)", {"id": t5})
+    await sql("update topups set created_at = now() - interval '31 minutes' where id = CAST(:id AS uuid)", {"id": t5})
     t6, _ = await new_topup(140)
+    await sql("update topups set created_at = now() - interval '20 minutes' where id = CAST(:id AS uuid)", {"id": t6})
     lst = {t["id"]: t for t in (await c.get("/topups")).json()}
-    check("unpaid after 10 minutes → expired; newer ones stay open", lst[t5]["status"] == "expired"
+    check("unpaid after 30 minutes → expired; a 20-minute-old one stays open", lst[t5]["status"] == "expired"
           and lst[t6]["status"] == "pending" and lst[t6]["expires_at"], (lst[t5], lst[t6]))
-    await sql("update topups set created_at = now() - interval '11 minutes' where id = CAST(:id AS uuid)", {"id": t6})
+    await sql("update topups set created_at = now() - interval '31 minutes' where id = CAST(:id AS uuid)", {"id": t6})
     await run_sync_once()
     check("background sync expires stale top-ups too", (await status_of(t6))[0]["status"] == "expired")
     r = await c.post(f"/topups/{t5}/cancel")

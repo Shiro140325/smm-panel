@@ -19,7 +19,7 @@ from app.db import transaction
 
 log = logging.getLogger("payments")
 PAYMONGO_API = os.environ.get("PAYMONGO_API_BASE", "https://api.paymongo.com/v1")
-TOPUP_TTL_MINUTES = 10
+TOPUP_TTL_MINUTES = 30
 CREDITABLE = "('pending', 'canceled', 'expired')"   # a real payment is credited even after we closed it
 
 
