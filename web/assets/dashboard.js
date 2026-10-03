@@ -1060,6 +1060,7 @@ const armed = (id) => cancelArmed.id === id && Date.now() < cancelArmed.until;
 
 function refillCell(o) {
   if (o.cancel_requested) return `<span class="muted">Cancel requested</span>`;
+  if (o.cancel_declined) return `<span class="muted">Couldn't be canceled</span>`;
   if (o.can_cancel) {
     return `<button type="button" class="btn btn-sm order-cancel${armed(o.id) ? " armed" : ""}" data-cancel-order="${o.id}">${armed(o.id) ? "Tap again to cancel" : "Cancel order"}</button>`;
   }
@@ -1144,8 +1145,8 @@ async function loadOrders() {
     b.disabled = true;
     b.textContent = "Canceling…";
     try {
-      await api(`/orders/${id}/cancel`, { method: "POST" });
-      toast("Cancel requested. Anything not delivered is refunded once the provider confirms.");
+      const r = await api(`/orders/${id}/cancel`, { method: "POST" });
+      toast(r.message || "Cancel requested.");
     } catch (ex) {
       toast(ex.message, { bad: true });
     }
@@ -1187,7 +1188,7 @@ function renderOrders() {
         <tbody id="orders-body"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
       </table>
     </div></div>
-    <p class="hint"><span id="orders-updated"></span> · Running orders update every 10 seconds. Pending and in-progress orders can be canceled on services that allow it. Refill is available after an order completes, for the period shown on the service. Undelivered amounts are refunded to your balance automatically.</p>`;
+    <p class="hint"><span id="orders-updated"></span> · Running orders update every 10 seconds. Orders can be canceled until they finish; anything not delivered is refunded once the cancel goes through. Refill is available after an order completes, for the period shown on the service. Undelivered amounts are refunded to your balance automatically.</p>`;
 
   view.querySelectorAll("[data-filter]").forEach((b) => b.addEventListener("click", () => {
     state.ordersFilter = b.dataset.filter;

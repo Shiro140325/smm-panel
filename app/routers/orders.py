@@ -349,9 +349,11 @@ async def list_orders(status: str | None = None, q: str | None = None,
                    end as refill_state,
                    coalesce((select sum(l.delta) from ledger l
                               where l.reason = 'refund' and l.ref = o.id::text), 0) as refunded_php,
-                   (o.status in ('pending', 'in_progress') and o.cancel_requested_at is not null) as cancel_requested,
-                   (o.status = 'queued' or (o.status in ('pending', 'in_progress') and o.cancel_requested_at is null
-                     and o.provider_order_id is not null and coalesce(ps.cancel, false))) as can_cancel
+                   (o.status in ('pending', 'in_progress', 'needs_review') and o.cancel_requested_at is not null
+                     and o.cancel_declined_at is null) as cancel_requested,
+                   (o.status in ('pending', 'in_progress', 'needs_review') and o.cancel_declined_at is not null) as cancel_declined,
+                   (o.status in ('queued', 'pending', 'in_progress', 'needs_review')
+                     and o.cancel_requested_at is null and o.cancel_declined_at is null) as can_cancel
               from orders o
               join services s on s.id = o.service_id
               left join provider_services ps
@@ -440,16 +442,22 @@ async def refill_order(order_id: int, user_id: int) -> int:
 
 @router.post("/{order_id}/cancel")
 async def request_cancel(order_id: int, user: dict = Depends(current_user)):
-    await cancel_order(order_id, user["id"])
-    return {"ok": True}
+    return {"ok": True, "message": await cancel_order(order_id, user["id"])}
 
 
-async def cancel_order(order_id: int, user_id: int) -> None:
-    """Ask the provider to cancel a running order. Nothing is refunded here: when the provider
-    reports it canceled (or partial), the status sync refunds the undelivered part."""
+CANCELABLE = ("queued", "pending", "in_progress", "needs_review")   # not partial, canceled, completed or failed
+MSG_REQUESTED = "Cancel requested. Anything not delivered is refunded to your balance once it's canceled."
+
+
+async def cancel_order(order_id: int, user_id: int) -> str:
+    """Cancel an order. Still queued (never sent) → canceled here with a full refund. Otherwise the
+    provider's cancel API when the service supports it; when it doesn't (or refuses), the request goes
+    to the owner's "Cancellation pending" list to ask the provider's support by hand. Either way the
+    refund comes from the status sync once the provider reports the order canceled or partial.
+    Returns the message for the customer."""
     async with transaction() as db:
         row = await db.fetch_one("""
-            select o.status, o.provider_order_id, o.cancel_requested_at, ps.cancel,
+            select o.status, o.provider_order_id, o.cancel_requested_at, o.cancel_declined_at, ps.cancel,
                    p.api_url, p.api_key_env
               from orders o
               join services s on s.id = o.service_id
@@ -472,27 +480,31 @@ async def cancel_order(order_id: int, user_id: int) -> None:
             if o["source"] == "trial":
                 await db.execute("update users set trial_used_at = null, trial_device = null, trial_ip = null where id = :u",
                                  {"u": user_id})
-        return
-    if row["status"] not in ("pending", "in_progress") or not row["provider_order_id"]:
-        raise HTTPException(400, "Only pending or in-progress orders can be canceled")
-    if not row["cancel"]:
-        raise HTTPException(400, "This service can't be canceled once placed")
+        return "Order canceled. The full amount is back in your balance."
+    if row["status"] not in CANCELABLE:
+        raise HTTPException(400, "This order can't be canceled anymore")
+    if row["cancel_declined_at"]:
+        raise HTTPException(400, "This order couldn't be canceled")
     if row["cancel_requested_at"]:
         raise HTTPException(409, "Cancel already requested")
 
-    provider = {k: row[k] for k in ("api_url", "api_key_env")}
-    try:
-        res = await SMMClient.for_provider(provider).cancel([row["provider_order_id"]])
-    except ProviderError as e:
-        raise HTTPException(400, f"Cancel not accepted: {e}")
-    # API v2: [{"order": 123, "cancel": 1}] or [{"order": 123, "cancel": {"error": "..."}}]
-    item = next((x for x in (res if isinstance(res, list) else [])
-                 if str(x.get("order")) == str(row["provider_order_id"])), None)
-    result = (item or {}).get("cancel")
-    if isinstance(result, dict) or not result:
-        err = result.get("error") if isinstance(result, dict) else "no answer from provider"
-        raise HTTPException(400, f"Cancel not accepted: {err}")
-
+    via_api = bool(row["cancel"] and row["provider_order_id"] and row["status"] in ("pending", "in_progress"))
+    if via_api:
+        provider = {k: row[k] for k in ("api_url", "api_key_env")}
+        try:
+            res = await SMMClient.for_provider(provider).cancel([row["provider_order_id"]])
+            # API v2: [{"order": 123, "cancel": 1}] or [{"order": 123, "cancel": {"error": "..."}}]
+            item = next((x for x in (res if isinstance(res, list) else [])
+                         if str(x.get("order")) == str(row["provider_order_id"])), None)
+            result = (item or {}).get("cancel")
+            via_api = bool(result) and not isinstance(result, dict)
+            if not via_api:
+                log.info("provider refused cancel of order %s: %s", order_id, result)
+        except Exception as e:   # refused or unreachable: ask by hand instead
+            log.info("provider cancel failed for order %s: %s", order_id, e)
+            via_api = False
     async with transaction() as db:
-        await db.execute("update orders set cancel_requested_at = now(), updated_at = now() where id = :id",
-                         {"id": order_id})
+        # manual = the owner has to ask the provider's support (listed under Cancellation pending)
+        await db.execute("update orders set cancel_requested_at = now(), cancel_manual = :m, updated_at = now() "
+                         "where id = :id", {"id": order_id, "m": not via_api})
+    return MSG_REQUESTED

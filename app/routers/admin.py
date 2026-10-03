@@ -222,7 +222,9 @@ async def overview(db: DB = Depends(get_db)):
           (select coalesce(sum(amount_php), 0) from topups where status = 'credited' and credited_at >= date_trunc('day', now() at time zone 'Asia/Manila') at time zone 'Asia/Manila') as topups_today,
           (select coalesce(sum(amount_php), 0) from topups where status = 'credited' and credited_at > now() - interval '7 days') as topups_7d,
           (select coalesce(sum(amount_php), 0) from topups where status = 'credited') as topups_all,
-          (select count(*) from orders where status = 'needs_review') as needs_review
+          (select count(*) from orders where status = 'needs_review') as needs_review,
+          (select count(*) from orders where cancel_manual and cancel_requested_at is not null and cancel_declined_at is null
+             and status in ('pending', 'in_progress', 'needs_review')) as cancels_pending
     """)
     sales = await db.fetch_all("""
         with o as (
@@ -386,6 +388,43 @@ async def set_hidden(service_id: int, body: HiddenIn, db: DB = Depends(get_db)):
         raise HTTPException(404, "Service not found")
     services_router._built.clear()   # customers see the change on their next load
     services_router._cache.clear()
+    return {"ok": True}
+
+
+CANCEL_OPEN = """o.cancel_manual and o.cancel_requested_at is not null and o.cancel_declined_at is null
+                 and o.status in ('pending', 'in_progress', 'needs_review')"""
+
+
+@router.get("/cancellations", dependencies=[Depends(require_admin)])
+async def cancellations(view: str = "open", db: DB = Depends(get_db)):
+    """Cancel requests to take to the provider's support by hand. view=done: recent outcomes."""
+    where = CANCEL_OPEN if view != "done" else """o.cancel_manual and o.cancel_requested_at is not null
+        and not (""" + CANCEL_OPEN + ")"
+    order = "o.cancel_requested_at asc" if view != "done" else "coalesce(o.cancel_declined_at, o.updated_at) desc"
+    return await db.fetch_all(f"""
+        select o.id, o.created_at, o.cancel_requested_at, o.cancel_contacted_at, o.cancel_declined_at, o.status,
+               o.quantity, o.remains, o.price_php, o.link, o.provider_order_id, u.email, s.name as service_name, s.tier,
+               coalesce((select sum(l.delta) from ledger l where l.reason = 'refund' and l.ref = o.id::text), 0) as refunded_php
+          from orders o join users u on u.id = o.user_id join services s on s.id = o.service_id
+         where {where}
+         order by {order} limit 100
+    """)
+
+
+class CancelActionIn(BaseModel):
+    action: str = Field(pattern="^(contacted|uncontacted|declined)$")
+
+
+@router.post("/cancellations/{order_id}", dependencies=[Depends(require_admin)])
+async def cancellation_action(order_id: int, body: CancelActionIn, db: DB = Depends(get_db)):
+    """contacted: you asked the provider's support · declined: it couldn't be canceled (the customer sees that)."""
+    sets = {"contacted": "cancel_contacted_at = now()", "uncontacted": "cancel_contacted_at = null",
+            "declined": "cancel_declined_at = now()"}[body.action]
+    row = await db.fetch_one(f"update orders o set {sets}, updated_at = now() where o.id = :id and {CANCEL_OPEN} returning o.id",
+                             {"id": order_id})
+    if not row:
+        raise HTTPException(404, "Not in the cancellation list anymore")
+    log.info("admin cancel request %s on order %s", body.action, order_id)
     return {"ok": True}
 
 

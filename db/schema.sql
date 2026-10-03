@@ -203,3 +203,10 @@ create table if not exists admin_backup_codes (
   code_hash text primary key,            -- HMAC of a one-time backup code
   used_at   timestamptz
 );
+
+-- Cancel requests: cancel_manual = the provider has no cancel for it (or refused), so the owner asks
+-- their support by hand ("Cancellation pending" in /admin). The refund still comes from the status sync.
+alter table orders add column if not exists cancel_manual boolean not null default false;
+alter table orders add column if not exists cancel_contacted_at timestamptz;   -- owner asked the provider's support
+alter table orders add column if not exists cancel_declined_at timestamptz;    -- couldn't be canceled
+create index if not exists orders_cancel_pending on orders (cancel_requested_at) where cancel_manual and cancel_declined_at is null;

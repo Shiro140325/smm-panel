@@ -156,7 +156,7 @@ function render() {
     if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   });
   ({ overview: renderOverview, orders: renderOrders, customers: renderCustomers, topups: renderTopups, services: renderServices,
-     growth: renderGrowth, affiliates: renderAffiliates, trials: renderTrials, ledger: renderLedger, errors: renderErrors,
+     cancels: renderCancels, growth: renderGrowth, affiliates: renderAffiliates, trials: renderTrials, ledger: renderLedger, errors: renderErrors,
      more: renderMore }[name]
     || renderOverview)();
   window.scrollTo(0, 0);
@@ -187,6 +187,8 @@ async function renderOverview() {
     <div class="card panel sending-card" id="sending"><div class="empty" style="padding:0">Loading…</div></div>
     ${d.needs_review ? `<a class="alert alert-bad" href="#orders?status=needs_review" style="text-decoration:none;margin-bottom:16px">
       ${icons.warn(20)}<span><strong>${num(d.needs_review)} order${d.needs_review === 1 ? "" : "s"} under review.</strong> Check them against SMMGen and refund any that weren't placed.</span></a>` : ""}
+    ${d.cancels_pending ? `<a class="alert alert-warn" href="#cancels" style="text-decoration:none;margin-bottom:16px">
+      ${icons.warn(20)}<span><strong>${num(d.cancels_pending)} cancel request${d.cancels_pending === 1 ? "" : "s"} to take to SMMGen support.</strong> Open Cancellations.</span></a>` : ""}
     <div class="stats">
       ${prov}
       <div class="stat"><span class="k">Customer balances</span><span class="v">${peso(owed)}</span>
@@ -211,6 +213,75 @@ async function renderOverview() {
     </div>`;
   setupAnnouncement();
   setupSending();
+  paintCancelCount(d.cancels_pending);
+}
+
+/* ------------------------------------------------------------ cancellations */
+
+function paintCancelCount(n) {
+  const el = $("cancel-count");
+  if (!el) return;
+  el.textContent = n > 99 ? "99+" : String(n || "");
+  el.classList.toggle("hidden", !n);
+}
+
+function renderCancels() {
+  let view_ = "open";
+  view.innerHTML = `<div class="page-head"><h1>Cancellations</h1></div>
+    <p class="hint" style="margin-top:-6px">Customers asked to cancel these, but SMMGen has no cancel button for them (or refused it).
+      Ask SMMGen support to cancel them. When SMMGen marks an order canceled or partial, the customer is refunded automatically and it leaves this list.</p>
+    <div class="orders-toolbar">
+      <div class="pill-row" role="group" aria-label="Show">${pill("open", "To do", "open", "data-cv")}${pill("done", "Done", "open", "data-cv")}</div>
+      <button type="button" class="btn btn-secondary" id="copy-req">Copy request for SMMGen support</button>
+    </div>
+    <div class="card table-card"><div class="table-scroll"><table class="table">
+      <thead><tr><th>Requested</th><th>Order</th><th>Customer and service</th><th>Status</th><th id="cv-last">Actions</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody></table></div></div>`;
+  let rows = [];
+  const load = async () => {
+    try { rows = await call(`/admin/api/cancellations?view=${view_}`); } catch (e) { $("rows").innerHTML = failRow(5, e); return; }
+    if (view_ === "open") paintCancelCount(rows.length);
+    $("copy-req").classList.toggle("hidden", view_ !== "open" || !rows.some((r) => r.provider_order_id && !r.cancel_contacted_at));
+    $("cv-last").textContent = view_ === "open" ? "Actions" : "Outcome";
+    $("rows").innerHTML = rows.length ? rows.map((r) => `<tr>
+      <td class="muted" style="white-space:nowrap">${fmtDate(r.cancel_requested_at)}</td>
+      <td class="mono" style="white-space:nowrap">#${r.id}<div class="hint" style="margin:2px 0 0">SMMGen #${r.provider_order_id ?? "–"}</div></td>
+      <td><div class="svc">${esc(r.service_name)} ${tierBadge(r.tier)}</div><div class="link">${esc(r.email)}</div>
+        <div class="hint" style="margin:2px 0 4px">${num(r.quantity)} ordered · ${r.remains == null ? "–" : num(r.remains)} left · ${peso(r.price_php)}</div>
+        ${/^https?:\/\//i.test(r.link || "") ? `<a class="btn open-link" href="${esc(r.link)}" target="_blank" rel="noopener noreferrer">${icons.external(14)}Open link</a>` : ""}</td>
+      <td>${badge(ORDER_STATUS, r.status)}</td>
+      <td>${view_ === "open" ? `<div class="cv-actions">
+          ${r.cancel_contacted_at
+            ? `<span class="muted">Asked ${fmtDate(r.cancel_contacted_at)}</span><button type="button" class="btn btn-ghost btn-sm" data-act="uncontacted" data-id="${r.id}">Undo</button>`
+            : `<button type="button" class="btn btn-secondary btn-sm" data-act="contacted" data-id="${r.id}">I asked SMMGen</button>`}
+          <button type="button" class="btn btn-ghost btn-sm" data-act="declined" data-id="${r.id}">Couldn't cancel</button></div>`
+        : r.cancel_declined_at ? `<span class="muted">Couldn't cancel (${fmtDate(r.cancel_declined_at)})</span>`
+        : Number(r.refunded_php) > 0 ? `<strong>${peso(r.refunded_php)} refunded</strong>`
+        : r.status === "completed" ? `<span class="muted">Finished before the cancel</span>` : `<span class="muted">–</span>`}</td></tr>`).join("")
+      : `<tr><td colspan="5" class="empty">${view_ === "open" ? "No cancel requests waiting." : "Nothing here yet."}</td></tr>`;
+    $("rows").querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", async () => {
+      if (b.dataset.act === "declined" && !b.classList.contains("armed")) {   // second tap confirms
+        b.classList.add("armed"); b.textContent = "Tap again: tell the customer it can't be canceled"; return;
+      }
+      b.disabled = true;
+      try {
+        await call(`/admin/api/cancellations/${b.dataset.id}`, { method: "POST", body: { action: b.dataset.act } });
+        if (b.dataset.act === "declined") toast("Marked as couldn't cancel. The order keeps running.");
+      } catch (e) { toast(e.message, { bad: true }); }
+      load();
+    }));
+  };
+  $("copy-req").onclick = async () => {
+    const ids = rows.filter((r) => r.provider_order_id && !r.cancel_contacted_at).map((r) => r.provider_order_id);
+    const text = `Hello, please cancel ${ids.length === 1 ? "this order" : "these orders"}: ${ids.join(", ")}. Thank you.`;
+    try { await navigator.clipboard.writeText(text); toast(`Copied: ${text}`); } catch { toast(text); }
+  };
+  view.querySelectorAll("[data-cv]").forEach((b) => b.addEventListener("click", () => {
+    view_ = b.dataset.cv;
+    view.querySelectorAll("[data-cv]").forEach((x) => x.setAttribute("aria-pressed", x === b));
+    load();
+  }));
+  load();
 }
 
 /* pause / resume sending orders to SMMGen */
@@ -461,6 +532,7 @@ function renderServices() {
 /* ------------------------------------------------------------ more (phones: the tabs that don't fit the bar) */
 
 const MORE = [
+  ["cancels", "warn", "Cancellations", "Cancel requests to take to SMMGen support"],
   ["services", "grid", "Services", "Hide or show services"],
   ["growth", "monitor", "Growth", "Sign-ups, orders and payments by day"],
   ["affiliates", "gift", "Affiliates", "Customers who brought in sign-ups"],

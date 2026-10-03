@@ -392,8 +392,15 @@ async def main():
           (bal_c0, bal_c1, lst[oc["id"]]))
     oc2 = (await c.post("/orders", json={"service_id": 3, "link": "https://instagram.com/p/y", "quantity": 1, "comments": "Nice"})).json()
     lst = {o["id"]: o for o in (await c.get("/orders")).json()}
+    bal_m0 = (await c.get("/auth/me")).json()["balance_php"]
     r = await c.post(f"/orders/{oc2['id']}/cancel")
-    check("service without cancel: no button, 400", not lst[oc2["id"]]["can_cancel"] and r.status_code == 400, r.text)
+    lst2 = {o["id"]: o for o in (await c.get("/orders")).json()}
+    check("service without cancel: button still shown, request goes to the owner", lst[oc2["id"]]["can_cancel"] and r.status_code == 200
+          and "Cancel requested" in r.json()["message"] and lst2[oc2["id"]]["cancel_requested"] and not lst2[oc2["id"]]["can_cancel"]
+          and (await sql("select cancel_manual from orders where id = :i", {"i": oc2["id"]}))[0]["cancel_manual"] is True
+          and (await c.get("/auth/me")).json()["balance_php"] == bal_m0, (r.text, lst2[oc2["id"]]))
+    oc3 = (await c.post("/orders", json={"service_id": 3, "link": "https://instagram.com/p/z", "quantity": 1, "comments": "Wow"})).json()
+    await c.post(f"/orders/{oc3['id']}/cancel")
     r = await c.post(f"/orders/{o_hq['id']}/cancel")
     check("completed order can't be canceled", r.status_code == 400, r.text)
 
@@ -438,6 +445,31 @@ async def main():
     check("admin: backup codes left", me_a["backup_codes_left"] == 7 and me_a["setup_required"] is False, me_a)
     await cb2.aclose()
     # --- pause sending orders to SMMGen: orders still accepted (charged, queued), sent 1/second on resume
+    # --- cancellation pending: cancel requests the provider can't take by API
+    ov_c = (await ca.get("/admin/api/overview")).json()
+    cl = (await ca.get("/admin/api/cancellations")).json()
+    check("cancels: listed for the owner, oldest first, with the SMMGen order number", [x["id"] for x in cl] == [oc2["id"], oc3["id"]]
+          and cl[0]["provider_order_id"] and ov_c["cancels_pending"] == 2, (cl, ov_c.get("cancels_pending")))
+    r = await ca.post(f"/admin/api/cancellations/{oc2['id']}", json={"action": "contacted"})
+    check("cancels: mark as asked", r.status_code == 200 and (await ca.get("/admin/api/cancellations")).json()[0]["cancel_contacted_at"], r.text)
+    r = await c.post(f"/admin/api/cancellations/{oc2['id']}", json={"action": "contacted"})
+    check("cancels: customers can't touch the list", r.status_code == 401, r.text)
+    pid_m = str((await sql("select provider_order_id from orders where id = :i", {"i": oc2["id"]}))[0]["provider_order_id"])
+    bal_m1 = (await c.get("/auth/me")).json()["balance_php"]
+    await m.post("/_set_order", data={"oid": pid_m, "status": "Canceled", "remains": "1"})
+    await run_sync_once()
+    bal_m2 = (await c.get("/auth/me")).json()["balance_php"]
+    cl = (await ca.get("/admin/api/cancellations")).json()
+    done = (await ca.get("/admin/api/cancellations", params={"view": "done"})).json()
+    check("cancels: SMMGen cancels it → refunded automatically, moves to Done", round(bal_m2 - bal_m1, 2) == oc2["charge_php"]
+          and [x["id"] for x in cl] == [oc3["id"]] and any(x["id"] == oc2["id"] and float(x["refunded_php"]) > 0 for x in done), (bal_m1, bal_m2, cl))
+    r = await ca.post(f"/admin/api/cancellations/{oc3['id']}", json={"action": "declined"})
+    lst3 = {o["id"]: o for o in (await c.get("/orders")).json()}
+    check("cancels: couldn't cancel → off the list, customer sees it, can't ask again", r.status_code == 200
+          and (await ca.get("/admin/api/cancellations")).json() == [] and lst3[oc3["id"]]["cancel_declined"]
+          and not lst3[oc3["id"]]["can_cancel"] and not lst3[oc3["id"]]["cancel_requested"]
+          and (await c.post(f"/orders/{oc3['id']}/cancel")).status_code == 400, (r.text, lst3[oc3["id"]]))
+
     r = await ca.post("/admin/api/sending", json={"paused": True})
     check("pause: sending paused", r.status_code == 200 and r.json()["paused"] is True and r.json()["queued"] == 0, r.text)
     bq0 = (await c.get("/auth/me")).json()["balance_php"]

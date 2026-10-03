@@ -86,10 +86,6 @@ async def _user_for(key: str, request: Request) -> int:
 async def _services() -> list[dict]:
     async with transaction() as db:
         rows = await _rows(db, None, False)
-        cancellable = {r["id"] for r in await db.fetch_all("""
-            select s.id from services s join provider_services ps
-              on ps.provider_id = s.provider_id and ps.provider_service_id = s.provider_service_id
-             where coalesce(ps.cancel, false)""")}
     return [{
         "service": r["id"],
         "name": r["name"],
@@ -99,7 +95,7 @@ async def _services() -> list[dict]:
         "min": r["min"],
         "max": r["max"],
         "refill": bool(r["refill_days"]),
-        "cancel": r["id"] in cancellable,
+        "cancel": True,   # every order can be canceled until it finishes (by hand when the provider has no cancel)
     } for r in rows]
 
 
