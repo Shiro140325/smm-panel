@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
+from app import order_queue
 from app.db import transaction
 from app.pricing import SERVICE_SELECT, order_price_php, price_per_1k_php
 from app.providers.smm_client import ProviderError, SMMClient
@@ -18,7 +19,7 @@ from app.workers.sync import sync_user_orders
 log = logging.getLogger("orders")
 router = APIRouter(prefix="/orders", tags=["orders"])
 
-OPEN_STATUSES = ("creating", "pending", "in_progress")
+OPEN_STATUSES = ("queued", "creating", "pending", "in_progress")
 
 
 CUSTOM_COMMENTS = "custom comments"
@@ -88,11 +89,13 @@ async def place_order(user_id: int, service_id: int, link: str, quantity: int, c
         if await balance_of(db, user_id) < price:
             raise HTTPException(402, "Not enough balance")
 
+        # sending paused (or a backlog still going out): charge now, send later from the queue
+        queued = await order_queue.should_queue(db)
         order = await db.fetch_one("""
-            insert into orders (user_id, service_id, provider_id, link, quantity, price_php, comments, source)
-            values (:u, :s, :p, :l, :q, :price, :c, :src) returning id
+            insert into orders (user_id, service_id, provider_id, link, quantity, price_php, comments, source, status)
+            values (:u, :s, :p, :l, :q, :price, :c, :src, :st) returning id
         """, {"u": user_id, "s": svc["id"], "p": svc["provider_id"], "l": link,
-              "q": quantity, "price": price, "c": comments, "src": source})
+              "q": quantity, "price": price, "c": comments, "src": source, "st": "queued" if queued else "creating"})
         if price > 0:
             await db.execute(
                 "insert into ledger (user_id, delta, reason, ref) values (:u, :d, 'order', :r)",
@@ -100,36 +103,18 @@ async def place_order(user_id: int, service_id: int, link: str, quantity: int, c
             )
         provider = await db.fetch_one("select * from providers where id = :p", {"p": svc["provider_id"]})
 
+    result = {"id": order["id"], "status": "pending", "quantity": quantity, "charge_php": price, "free_trial": source == "trial"}
+    if queued:
+        kick_queue()   # no-op while paused; otherwise makes sure the backlog is moving
+        return {**result, "queued": True}
+
     # 2) place upstream — outside the transaction
-    try:
-        client = SMMClient.for_provider(provider)
-        extra = {"comments": comments} if comments else {}
-        provider_order_id = await client.add(svc["provider_service_id"], link, quantity, **extra)
-    except ProviderError as e:
-        # provider rejected it: mark failed and refund in full
-        async with transaction() as db:
-            await _fail_and_refund(db, order["id"], user_id, price)
-            if source == "trial":   # the trial wasn't delivered: give it back
-                await db.execute("update users set trial_used_at = null, trial_device = null, trial_ip = null where id = :u",
-                                 {"u": user_id})
-        raise HTTPException(400, f"Order rejected by provider: {e}")
-    except Exception:
-        # network error/timeout: we can't know whether it was placed — never auto-refund
-        log.exception("provider add failed for order %s", order["id"])
-        async with transaction() as db:
-            await db.execute(
-                "update orders set status = 'needs_review', updated_at = now() where id = :id",
-                {"id": order["id"]},
-            )
+    outcome, err = await _submit(order["id"])
+    if outcome == "failed":
+        raise HTTPException(400, f"Order rejected by provider: {err}")
+    if outcome == "needs_review":
         raise HTTPException(502, "Couldn't confirm the order with our provider. Support will check it.")
-
-    async with transaction() as db:
-        await db.execute("""
-            update orders set provider_order_id = :po, status = 'pending', updated_at = now()
-            where id = :id
-        """, {"po": provider_order_id, "id": order["id"]})
-
-    return {"id": order["id"], "status": "pending", "quantity": quantity, "charge_php": price, "free_trial": source == "trial"}
+    return result
 
 
 # ------------------------------------------------------------------ mass order
@@ -215,6 +200,80 @@ async def mass_order(body: MassIn, user: dict = Depends(current_user)):
             "charged_php": round(sum(r["charge_php"] for r in ok), 2)}
 
 
+async def _submit(order_id: int) -> tuple[str, str | None]:
+    """Send one charged order (status 'creating') to its provider. Returns ('pending', None),
+    ('failed', reason) after a full refund, or ('needs_review', None) when we can't tell if it was placed."""
+    async with transaction() as db:
+        o = await db.fetch_one("""
+            select o.id, o.user_id, o.price_php, o.source, o.link, o.quantity, o.comments, o.provider_id,
+                   s.provider_service_id
+              from orders o join services s on s.id = o.service_id where o.id = :id
+        """, {"id": order_id})
+        provider = await db.fetch_one("select * from providers where id = :p", {"p": o["provider_id"]})
+    try:
+        client = SMMClient.for_provider(provider)
+        extra = {"comments": o["comments"]} if o["comments"] else {}
+        provider_order_id = await client.add(o["provider_service_id"], o["link"], o["quantity"], **extra)
+    except ProviderError as e:
+        # provider rejected it: mark failed and refund in full
+        async with transaction() as db:
+            await _fail_and_refund(db, o["id"], o["user_id"], float(o["price_php"]))
+            if o["source"] == "trial":   # the trial wasn't delivered: give it back
+                await db.execute("update users set trial_used_at = null, trial_device = null, trial_ip = null where id = :u",
+                                 {"u": o["user_id"]})
+        return "failed", str(e)
+    except Exception:
+        # network error/timeout: we can't know whether it was placed — never auto-refund
+        log.exception("provider add failed for order %s", o["id"])
+        async with transaction() as db:
+            await db.execute("update orders set status = 'needs_review', updated_at = now() where id = :id", {"id": o["id"]})
+        return "needs_review", None
+    async with transaction() as db:
+        await db.execute("""
+            update orders set provider_order_id = :po, status = 'pending', updated_at = now()
+            where id = :id
+        """, {"po": provider_order_id, "id": o["id"]})
+    return "pending", None
+
+
+QUEUE_GAP_SECONDS = 1.0
+_drain_lock = asyncio.Lock()
+
+
+async def drain_queue() -> int:
+    """Send queued orders, oldest first, one per QUEUE_GAP_SECONDS, until the queue is empty or
+    sending is paused again. Only one runs at a time."""
+    if _drain_lock.locked():
+        return 0
+    sent = 0
+    async with _drain_lock:
+        while True:
+            async with transaction() as db:
+                if await order_queue.is_paused(db):
+                    break
+                oid = await db.fetch_val("""
+                    update orders set status = 'creating', updated_at = now()
+                     where id = (select id from orders where status = 'queued' order by id limit 1 for update skip locked)
+                    returning id
+                """)
+            if not oid:
+                break
+            try:
+                outcome, err = await _submit(oid)
+                log.info("queued order %s sent: %s%s", oid, outcome, f" ({err})" if err else "")
+            except Exception:
+                log.exception("queued order %s: send failed", oid)
+            sent += 1
+            await asyncio.sleep(QUEUE_GAP_SECONDS)
+    return sent
+
+
+def kick_queue() -> None:
+    """Start sending the backlog in the background (if it isn't already)."""
+    if not _drain_lock.locked():
+        asyncio.get_running_loop().create_task(drain_queue())
+
+
 async def _fail_and_refund(db, order_id: int, user_id: int, price: float):
     await db.execute(
         "update orders set status = 'failed', updated_at = now() where id = :id", {"id": order_id}
@@ -254,7 +313,9 @@ ORDER_VIEWS = {
 
 
 def order_filter(status: str, where: list, params: dict) -> None:
-    if status in ORDER_VIEWS:
+    if status == "pending":   # queued orders look pending to customers
+        where.append("o.status in ('pending', 'queued')")
+    elif status in ORDER_VIEWS:
         where.append(ORDER_VIEWS[status])
     else:
         where.append("o.status = :st")
@@ -289,8 +350,8 @@ async def list_orders(status: str | None = None, q: str | None = None,
                    coalesce((select sum(l.delta) from ledger l
                               where l.reason = 'refund' and l.ref = o.id::text), 0) as refunded_php,
                    (o.status in ('pending', 'in_progress') and o.cancel_requested_at is not null) as cancel_requested,
-                   (o.status in ('pending', 'in_progress') and o.cancel_requested_at is null
-                     and o.provider_order_id is not null and coalesce(ps.cancel, false)) as can_cancel
+                   (o.status = 'queued' or (o.status in ('pending', 'in_progress') and o.cancel_requested_at is null
+                     and o.provider_order_id is not null and coalesce(ps.cancel, false))) as can_cancel
               from orders o
               join services s on s.id = o.service_id
               left join provider_services ps
@@ -399,6 +460,19 @@ async def cancel_order(order_id: int, user_id: int) -> None:
         """, {"id": order_id, "u": user_id})
     if not row:
         raise HTTPException(404, "Order not found")
+    if row["status"] == "queued":   # still waiting to be sent: cancel it here, full refund
+        async with transaction() as db:
+            o = await db.fetch_one("update orders set status = 'canceled', updated_at = now() "
+                                   "where id = :id and status = 'queued' returning price_php, source", {"id": order_id})
+            if not o:
+                raise HTTPException(409, "This order was just sent. Try again in a moment.")
+            if float(o["price_php"]) > 0:
+                await db.execute("insert into ledger (user_id, delta, reason, ref) values (:u, :d, 'refund', :r) "
+                                 "on conflict do nothing", {"u": user_id, "d": float(o["price_php"]), "r": str(order_id)})
+            if o["source"] == "trial":
+                await db.execute("update users set trial_used_at = null, trial_device = null, trial_ip = null where id = :u",
+                                 {"u": user_id})
+        return
     if row["status"] not in ("pending", "in_progress") or not row["provider_order_id"]:
         raise HTTPException(400, "Only pending or in-progress orders can be canceled")
     if not row["cancel"]:

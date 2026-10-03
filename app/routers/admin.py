@@ -15,12 +15,13 @@ import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
-from app import announcement, fx, tiers, totp
+from app import announcement, fx, order_queue, tiers, totp
 from app.config import get_settings
-from app.db import DB, get_db
+from app.db import DB, get_db, transaction
 from app.providers.smm_client import SMMClient
 from app.ratelimit import client_ip
 from app.routers import services as services_router
+from app.routers import orders as orders_router
 from app.routers.orders import _fail_and_refund, order_filter
 
 router = APIRouter(prefix="/admin/api", tags=["admin"])
@@ -385,6 +386,33 @@ async def set_hidden(service_id: int, body: HiddenIn, db: DB = Depends(get_db)):
         raise HTTPException(404, "Service not found")
     services_router._built.clear()   # customers see the change on their next load
     services_router._cache.clear()
+    return {"ok": True}
+
+
+class SendingIn(BaseModel):
+    paused: bool
+
+
+@router.get("/sending", dependencies=[Depends(require_admin)])
+async def sending_state(db: DB = Depends(get_db)):
+    return {**await order_queue.state(db), "draining": orders_router._drain_lock.locked()}
+
+
+@router.post("/sending", dependencies=[Depends(require_admin)])
+async def set_sending(body: SendingIn):
+    """Pause or resume sending orders to the provider. Resuming sends the backlog, one per second."""
+    async with transaction() as db:   # saved before the backlog starts, so the sender sees it
+        await order_queue.set_paused(db, body.paused)
+    log.warning("admin %s sending orders to the provider", "paused" if body.paused else "resumed")
+    if not body.paused:
+        orders_router.kick_queue()
+    async with transaction() as db:
+        return {**await order_queue.state(db), "draining": orders_router._drain_lock.locked()}
+
+
+@router.post("/sending/kick", dependencies=[Depends(require_admin)])
+async def kick_sending():
+    orders_router.kick_queue()
     return {"ok": True}
 
 

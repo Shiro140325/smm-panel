@@ -159,7 +159,7 @@ async def flag_stuck_orders() -> None:
     async with transaction() as db:
         await db.execute("""
             update orders set status = 'needs_review', updated_at = now()
-             where status = 'creating' and created_at < now() - interval '10 minutes'
+             where status = 'creating' and coalesce(updated_at, created_at) < now() - interval '10 minutes'
         """)
 
 

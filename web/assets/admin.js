@@ -15,7 +15,7 @@ document.querySelectorAll("[data-logout]").forEach((b) => {
 const view = document.getElementById("view");
 const $ = (id) => document.getElementById(id);
 const ORDER_STATUS = {
-  creating: ["Processing", "badge-pending"], pending: ["Pending", "badge-pending"],
+  queued: ["Queued", "badge-review"], creating: ["Processing", "badge-pending"], pending: ["Pending", "badge-pending"],
   in_progress: ["In progress", "badge-progress"], completed: ["Completed", "badge-completed"],
   partial: ["Partial", "badge-partial"], canceled: ["Canceled", "badge-canceled"],
   failed: ["Failed", "badge-failed"], needs_review: ["Under review", "badge-review"],
@@ -184,6 +184,7 @@ async function renderOverview() {
       <td class="num"><strong>${peso(s.profit_php)}</strong></td></tr>`;
   };
   $("ov").innerHTML = `
+    <div class="card panel sending-card" id="sending"><div class="empty" style="padding:0">Loading…</div></div>
     ${d.needs_review ? `<a class="alert alert-bad" href="#orders?status=needs_review" style="text-decoration:none;margin-bottom:16px">
       ${icons.warn(20)}<span><strong>${num(d.needs_review)} order${d.needs_review === 1 ? "" : "s"} under review.</strong> Check them against SMMGen and refund any that weren't placed.</span></a>` : ""}
     <div class="stats">
@@ -209,6 +210,44 @@ async function renderOverview() {
       </div>
     </div>`;
   setupAnnouncement();
+  setupSending();
+}
+
+/* pause / resume sending orders to SMMGen */
+let sendingTimer = null;
+async function setupSending() {
+  clearTimeout(sendingTimer);
+  const box = $("sending");
+  if (!box) return;
+  let st;
+  try { st = await call("/admin/api/sending"); } catch (e) { box.innerHTML = `<p class="hint" style="margin:0">${esc(e.message)}</p>`; return; }
+  const waiting = st.queued ? `<strong>${num(st.queued)} order${st.queued === 1 ? "" : "s"} waiting</strong> (${peso(st.queued_php)})` : "No orders waiting";
+  const secs = st.queued;
+  const text = st.paused
+    ? `Paused since ${fmtDate(st.paused_since)}. Customers can still order: they're charged and the order waits as Pending. ${waiting}. When you resume, they go to SMMGen one per second, oldest first.`
+    : st.queued
+      ? `Sending the backlog to SMMGen, one per second: ${waiting}, about ${secs < 60 ? `${secs} seconds` : `${Math.ceil(secs / 60)} minutes`} left. New orders join the end of the line.`
+      : "On. New orders go to SMMGen right away.";
+  box.classList.toggle("paused", st.paused);
+  box.innerHTML = `
+    <div class="sending-head">
+      <h3>Sending orders to SMMGen</h3>
+      <span class="badge ${st.paused ? "badge-failed" : st.queued ? "badge-progress" : "badge-completed"}">${st.paused ? "Paused" : st.queued ? "Sending backlog" : "On"}</span>
+    </div>
+    <p class="hint" style="margin:0">${text}</p>
+    <div><button type="button" class="btn ${st.paused ? "btn-primary" : "btn-secondary"}" id="send-toggle">${st.paused ? "Resume sending" : "Pause sending"}</button></div>`;
+  const btn = $("send-toggle");
+  btn.onclick = async () => {
+    const ask = st.paused ? `Tap again: send ${st.queued ? `${num(st.queued)} waiting order${st.queued === 1 ? "" : "s"} and ` : ""}resume` : "Tap again: pause sending";
+    if (btn.textContent !== ask) { btn.textContent = ask; btn.classList.add("armed"); return; }   // second tap confirms
+    btn.disabled = true;
+    try {
+      await call("/admin/api/sending", { method: "POST", body: { paused: !st.paused } });
+      toast(st.paused ? "Sending resumed" : "Sending paused. New orders will wait as Pending.");
+    } catch (e) { toast(e.message, { bad: true }); }
+    setupSending();
+  };
+  if (!st.paused && st.queued) sendingTimer = setTimeout(() => { if ($("sending")) setupSending(); }, 2000);   // live countdown
 }
 
 async function setupAnnouncement() {
@@ -239,7 +278,7 @@ async function setupAnnouncement() {
 
 /* ------------------------------------------------------------ orders */
 
-const ORDER_FILTERS = [["", "All"], ["needs_review", "Under review"], ["pending", "Pending"], ["in_progress", "In progress"],
+const ORDER_FILTERS = [["", "All"], ["needs_review", "Under review"], ["queued", "Queued"], ["pending", "Pending"], ["in_progress", "In progress"],
   ["completed", "Completed"], ["partial", "Partial"], ["canceled", "Canceled"], ["failed", "Failed"],
   ["refilling", "Refilling"], ["refunded", "Refunded"]];
 

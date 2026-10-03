@@ -437,6 +437,46 @@ async def main():
     me_a = (await ca.get("/admin/api/me")).json()
     check("admin: backup codes left", me_a["backup_codes_left"] == 7 and me_a["setup_required"] is False, me_a)
     await cb2.aclose()
+    # --- pause sending orders to SMMGen: orders still accepted (charged, queued), sent 1/second on resume
+    r = await ca.post("/admin/api/sending", json={"paused": True})
+    check("pause: sending paused", r.status_code == 200 and r.json()["paused"] is True and r.json()["queued"] == 0, r.text)
+    bq0 = (await c.get("/auth/me")).json()["balance_php"]
+    qids = []
+    for link in ("https://tiktok.com/@q/1", "https://tiktok.com/@q/2", "https://tiktok.com/@q/reject", "https://tiktok.com/@q/4"):
+        r = await c.post("/orders", json={"service_id": 1, "link": link, "quantity": 100})
+        qids.append(r.json().get("id"))
+    rows_q = await sql("select id, status, provider_order_id, price_php from orders where id = any(CAST(:ids AS bigint[])) order by id", {"ids": qids})
+    bq1 = (await c.get("/auth/me")).json()["balance_php"]
+    check("pause: orders accepted and charged, nothing sent", r.status_code == 200 and r.json().get("queued")
+          and all(x["status"] == "queued" and x["provider_order_id"] is None for x in rows_q)
+          and round(bq0 - bq1, 2) == round(sum(float(x["price_php"]) for x in rows_q), 2), (rows_q, bq0, bq1))
+    mine = {o["id"]: o for o in (await c.get("/orders", params={"status": "pending"})).json()}
+    check("pause: customer sees them as pending, cancelable", all(i in mine and mine[i]["status"] == "queued" and mine[i]["can_cancel"] for i in qids), mine)
+    st = (await ca.get("/admin/api/sending")).json()
+    check("pause: control panel counts the waiting orders", st["queued"] == 4 and st["paused"], st)
+    r = await c.post(f"/orders/{qids[3]}/cancel")
+    bq2 = (await c.get("/auth/me")).json()["balance_php"]
+    check("pause: a waiting order can be canceled, full refund", r.status_code == 200 and round(bq2 - bq1, 2) == float(rows_q[3]["price_php"])
+          and (await sql("select status from orders where id = :i", {"i": qids[3]}))[0]["status"] == "canceled", (r.text, bq1, bq2))
+    await asyncio.sleep(1.5)
+    check("pause: nothing goes out while paused", all(x["provider_order_id"] is None for x in
+          await sql("select provider_order_id from orders where id = any(CAST(:ids AS bigint[]))", {"ids": qids[:3]})))
+    r = await ca.post("/admin/api/sending", json={"paused": False})
+    check("resume: sending back on", r.status_code == 200 and r.json()["paused"] is False, r.text)
+    await asyncio.sleep(3.6)
+    sent = await sql("select id, status, provider_order_id, updated_at from orders where id = any(CAST(:ids AS bigint[])) order by id", {"ids": qids[:3]})
+    check("resume: backlog sent oldest first", sent[0]["status"] == "pending" and sent[0]["provider_order_id"]
+          and sent[1]["status"] == "pending" and sent[1]["provider_order_id"] and sent[1]["provider_order_id"] > sent[0]["provider_order_id"], sent)
+    gap = (sent[1]["updated_at"] - sent[0]["updated_at"]).total_seconds()
+    check("resume: one per second", gap >= 0.9, gap)
+    bq3 = (await c.get("/auth/me")).json()["balance_php"]
+    check("resume: an order the provider rejects is refunded", sent[2]["status"] == "failed"
+          and round(bq3 - bq2, 2) == float(rows_q[2]["price_php"]), (sent[2], bq2, bq3))
+    st = (await ca.get("/admin/api/sending")).json()
+    check("resume: queue empty", st["queued"] == 0 and not st["paused"], st)
+    r = await c.post("/orders", json={"service_id": 1, "link": "https://tiktok.com/@q/5", "quantity": 100})
+    check("resume: new orders go straight out again", r.status_code == 200 and not r.json().get("queued")
+          and (await sql("select provider_order_id from orders where id = :i", {"i": r.json()["id"]}))[0]["provider_order_id"], r.text)
     ov = (await ca.get("/admin/api/overview")).json()
     check("admin: overview has money, sales and SMMGen balance", ov.get("customers", 0) >= 2 and "all" in ov.get("sales", {})
           and ov["providers"] and ov["providers"][0].get("balance") == 100.0, ov)

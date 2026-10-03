@@ -904,3 +904,9 @@ a.pill { text-decoration: none; }
 .setup-key code { flex: 1; font-family: var(--font-mono); font-size: 14px; overflow-wrap: anywhere; }
 .setup-backups { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
 .setup-backups code { font-family: var(--font-mono); font-size: 16px; text-align: center; padding: 10px; border: 1px dashed var(--line); border-radius: 10px; }
+
+/* control panel: pause sending orders */
+.sending-card { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
+.sending-card.paused { border-color: var(--bad); }
+.sending-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sending-head h3 { margin: 0; }

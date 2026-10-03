@@ -23,7 +23,7 @@ per_key = Limiter(120, 60, "Too many requests: up to 120 per minute")
 bad_keys = Limiter(30, 15 * 60, "Too many invalid keys. Try again in 15 minutes.")
 MAX_IDS = 100
 
-STATUS = {"creating": "Pending", "pending": "Pending", "in_progress": "In progress", "completed": "Completed",
+STATUS = {"queued": "Pending", "creating": "Pending", "pending": "Pending", "in_progress": "In progress", "completed": "Completed",
           "partial": "Partial", "canceled": "Canceled", "failed": "Canceled", "needs_review": "Processing"}
 PLATFORMS = {"tiktok": "TikTok", "facebook": "Facebook", "instagram": "Instagram", "youtube": "YouTube", "x": "X",
              "telegram": "Telegram", "whatsapp": "WhatsApp", "spotify": "Spotify", "threads": "Threads",

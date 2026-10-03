@@ -1042,6 +1042,7 @@ async function placeMass(e) {
 /* --------------------------------------------------------------- orders */
 
 const STATUS = {
+  queued: ["Pending", "badge-pending"],   // waiting to be sent (sending is paused)
   creating: ["Processing", "badge-pending"],
   pending: ["Pending", "badge-pending"],
   in_progress: ["In progress", "badge-progress"],
@@ -1153,7 +1154,7 @@ async function loadOrders() {
   return orders;
 }
 
-const OPEN = ["creating", "pending", "in_progress"];
+const OPEN = ["queued", "creating", "pending", "in_progress"];
 
 function scheduleOrders(delay) {
   clearTimeout(state.ordersTimer);

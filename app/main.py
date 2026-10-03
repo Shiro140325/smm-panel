@@ -31,6 +31,7 @@ async def sync_loop(interval: int):
             await run_sync_once()
         except Exception:
             log.exception("sync run failed")
+        orders.kick_queue()   # resume sending a backlog after a restart (no-op while paused or empty)
         await asyncio.sleep(interval)
 
 
