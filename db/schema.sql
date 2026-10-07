@@ -242,3 +242,16 @@ create index if not exists bot_messages_unprocessed on bot_messages (chat_id) wh
 alter table topups add column if not exists bot_chat_id bigint references bot_chats(id);
 alter table topups add column if not exists bot_order jsonb;      -- chat order to place once this payment lands
 alter table users add column if not exists channel text;          -- 'messenger' for chat-only customers
+
+-- Messenger bot menu: what the bot sells, at the owner's own price, sent straight to an SMMGen service id
+create table if not exists bot_menu (
+  id                  serial primary key,
+  name                text not null,                      -- what the customer sees, e.g. "TikTok Followers"
+  per_qty             integer not null check (per_qty > 0),   -- the price is for this many (e.g. 1000)
+  price_php           numeric(10,2) not null check (price_php > 0),
+  provider_service_id bigint not null,                    -- SMMGen service id
+  active              boolean not null default true,
+  sort                integer not null default 0,
+  created_at          timestamptz not null default now()
+);
+alter table orders add column if not exists label text;   -- chat orders: the menu item's name

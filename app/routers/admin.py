@@ -504,6 +504,88 @@ async def bot_chat(chat_id: int, db: DB = Depends(get_db, scope="function")):
     return {"chat": chat, "messages": list(reversed(msgs))}
 
 
+async def _provider_service(db, psid: int):
+    return await db.fetch_one("""
+        select ps.provider_service_id, ps.name, ps.category, ps.type, ps.rate, ps.min_qty, ps.max_qty, ps.refill, ps.cancel,
+               p.currency, p.name as provider
+          from provider_services ps join providers p on p.id = ps.provider_id and p.active
+         where ps.provider_service_id = :id order by p.id limit 1""", {"id": psid})
+
+
+def _cost_php(svc, per_qty: int) -> float:
+    """What SMMGen charges us for per_qty of this service, in pesos (live rate, no buffer)."""
+    rate = fx.usd_to_php_raw() if (svc["currency"] or "USD").upper() == "USD" else 1.0
+    return round(float(svc["rate"]) * rate * per_qty / 1000, 2)
+
+
+@router.get("/bot/lookup", dependencies=[Depends(require_admin)])
+async def bot_lookup(id: int, per_qty: int = 1000, db: DB = Depends(get_db, scope="function")):
+    """SMMGen's details for a service id, to fill in a menu item."""
+    svc = await _provider_service(db, id)
+    if not svc:
+        raise HTTPException(404, f"SMMGen has no service #{id} (or it isn't in the synced catalog yet)")
+    return {**dict(svc), "rate": float(svc["rate"]), "cost_php": _cost_php(svc, max(1, per_qty)),
+            "custom_comments": (svc["type"] or "").strip().lower() == "custom comments"}
+
+
+class MenuItemIn(BaseModel):
+    name: str = Field(min_length=2, max_length=60)
+    per_qty: int = Field(gt=0, le=1_000_000)
+    price_php: float = Field(gt=0, le=1_000_000)
+    provider_service_id: int = Field(gt=0)
+    active: bool = True
+    sort: int = 0
+
+
+@router.get("/bot/menu", dependencies=[Depends(require_admin)])
+async def bot_menu(db: DB = Depends(get_db, scope="function")):
+    rows = await db.fetch_all("select * from bot_menu order by sort, id")
+    out = []
+    for r in rows:
+        svc = await _provider_service(db, r["provider_service_id"])
+        cost = _cost_php(svc, r["per_qty"]) if svc else None
+        out.append({**dict(r), "price_php": float(r["price_php"]),
+                    "smmgen": {"name": svc["name"], "min": svc["min_qty"], "max": svc["max_qty"], "cost_php": cost,
+                               "custom_comments": (svc["type"] or "").strip().lower() == "custom comments"} if svc else None})
+    return out
+
+
+async def _check_menu_item(db, body: MenuItemIn) -> None:
+    svc = await _provider_service(db, body.provider_service_id)
+    if not svc:
+        raise HTTPException(400, f"SMMGen has no service #{body.provider_service_id}")
+    if (svc["type"] or "").strip().lower() == "custom comments":
+        raise HTTPException(400, "That SMMGen service needs typed comments, which the bot can't take")
+
+
+@router.post("/bot/menu", dependencies=[Depends(require_admin)])
+async def bot_menu_add(body: MenuItemIn, db: DB = Depends(get_db, scope="function")):
+    await _check_menu_item(db, body)
+    row = await db.fetch_one("""insert into bot_menu (name, per_qty, price_php, provider_service_id, active, sort)
+                                values (:n, :q, :p, :ps, :a, :s) returning id""",
+                             {"n": body.name.strip(), "q": body.per_qty, "p": round(body.price_php, 2),
+                              "ps": body.provider_service_id, "a": body.active, "s": body.sort})
+    return {"id": row["id"]}
+
+
+@router.put("/bot/menu/{item_id}", dependencies=[Depends(require_admin)])
+async def bot_menu_edit(item_id: int, body: MenuItemIn, db: DB = Depends(get_db, scope="function")):
+    await _check_menu_item(db, body)
+    row = await db.fetch_one("""update bot_menu set name = :n, per_qty = :q, price_php = :p, provider_service_id = :ps,
+                                       active = :a, sort = :s where id = :id returning id""",
+                             {"id": item_id, "n": body.name.strip(), "q": body.per_qty, "p": round(body.price_php, 2),
+                              "ps": body.provider_service_id, "a": body.active, "s": body.sort})
+    if not row:
+        raise HTTPException(404, "Menu item not found")
+    return {"ok": True}
+
+
+@router.delete("/bot/menu/{item_id}", dependencies=[Depends(require_admin)])
+async def bot_menu_delete(item_id: int, db: DB = Depends(get_db, scope="function")):
+    await db.execute("delete from bot_menu where id = :id", {"id": item_id})
+    return {"ok": True}
+
+
 @router.post("/bot/chats/{chat_id}/unmute", dependencies=[Depends(require_admin)])
 async def bot_unmute(chat_id: int, db: DB = Depends(get_db, scope="function")):
     row = await db.fetch_one("""update bot_chats set muted_at = null, mute_reason = null,

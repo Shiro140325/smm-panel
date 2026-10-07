@@ -670,10 +670,26 @@ async def main():
     r = await ca.put("/admin/api/bot", json={"enabled": True, "notes": "Orders start within 1 hour."})
     check("bot: switched on, notes saved", r.status_code == 200 and r.json()["enabled"] and r.json()["notes"].startswith("Orders"), r.text)
 
+    # the bot menu: the owner's items, price per N, SMMGen service id
+    lk = (await ca.get("/admin/api/bot/lookup", params={"id": 2, "per_qty": 1000})).json()
+    check("menu: looks up the SMMGen service and the cost", lk.get("name") and lk["min_qty"] == 100 and lk["cost_php"] > 0, lk)
+    r = await ca.post("/admin/api/bot/menu", json={"name": "Comments", "per_qty": 10, "price_php": 20, "provider_service_id": 3})
+    check("menu: typed-comments services refused", r.status_code == 400, r.text)
+    r = await ca.post("/admin/api/bot/menu", json={"name": "Ghost", "per_qty": 1000, "price_php": 20, "provider_service_id": 99999})
+    check("menu: unknown SMMGen id refused", r.status_code == 400, r.text)
+    mi1 = (await ca.post("/admin/api/bot/menu", json={"name": "TikTok Followers", "per_qty": 1000, "price_php": 50, "provider_service_id": 1, "sort": 0})).json()["id"]
+    mi2 = (await ca.post("/admin/api/bot/menu", json={"name": "TikTok Followers HQ", "per_qty": 1000, "price_php": 120, "provider_service_id": 2, "sort": 1})).json()["id"]
+    mi3 = (await ca.post("/admin/api/bot/menu", json={"name": "Hidden thing", "per_qty": 100, "price_php": 5, "provider_service_id": 1, "active": False, "sort": 2})).json()["id"]
+    mn = (await ca.get("/admin/api/bot/menu")).json()
+    check("menu: listed with SMMGen name, cost and limits", [m["id"] for m in mn] == [mi1, mi2, mi3] and mn[1]["smmgen"]["min"] == 100
+          and mn[1]["smmgen"]["cost_php"] > 0 and mn[0]["price_php"] == 50, mn)
+    r = await ca.put(f"/admin/api/bot/menu/{mi3}", json={"name": "Hidden thing", "per_qty": 100, "price_php": 6, "provider_service_id": 1, "active": False, "sort": 2})
+    check("menu: edit an item", r.status_code == 200 and (await ca.get("/admin/api/bot/menu")).json()[2]["price_php"] == 6, r.text)
+
     # several quick messages → one AI call, one reply listing the real services
     await bm.post("/_llm_script", json={"answers": [
-        {"intent": "order", "lang": "tl", "platform": "tiktok", "category": "Followers", "quantity": 1000, "link": "", "reply": ""},
-        {"intent": "choose", "lang": "tl", "option": 2},
+        {"intent": "order", "lang": "tl", "item": 0, "quantity": 1000, "reply": ""},
+        {"intent": "choose", "lang": "tl", "item": 2},
         {"intent": "yes", "lang": "tl"}]})
     await fb_send("p1", "pa followers sa tiktok")
     await asyncio.sleep(0.3)
@@ -682,27 +698,33 @@ async def main():
     calls = (await bm.get("/_llm_calls")).json()
     check("bot: quick messages answered together, once", len(calls) == 1 and len(sent1) == 1
           and "pa followers sa tiktok\n1k https://www.tiktok.com/@juan" in calls[0]["messages"][-1]["content"], (calls, sent1))
-    check("bot: AI sees the shop notes and the real categories, not prices", "Orders start within 1 hour." in calls[0]["messages"][0]["content"]
-          and "tiktok: " in calls[0]["messages"][0]["content"] and "₱" not in calls[0]["messages"][0]["content"], calls[0]["messages"][0]["content"][:300])
+    sysmsg = calls[0]["messages"][0]["content"]
+    check("bot: AI sees the notes and only the active menu names, no prices", "Orders start within 1 hour." in sysmsg
+          and "1: TikTok Followers\n2: TikTok Followers HQ" in sysmsg and "Hidden thing" not in sysmsg and "₱" not in sysmsg, sysmsg[:400])
     t1 = fb_text(sent1[0])
-    check("bot: options with real prices for the quantity, in Taglish", "1)" in t1 and "2)" in t1 and "₱" in t1 and "Reply ng number" in t1, t1)
+    check("bot: unclear item → the menu with your prices, in Taglish", "1) TikTok Followers · ₱50.00 kada 1,000" in t1
+          and "2) TikTok Followers HQ · ₱120.00 kada 1,000" in t1 and "Hidden" not in t1 and "Reply ng number" in t1, t1)
     await fb_send("p1", "2")
     sent2 = await fb_wait("p1", 2)
     t2 = fb_text(sent2[1])
-    check("bot: summary with the link and total, asks YES", "https://www.tiktok.com/@juan" in t2 and "Total: ₱" in t2 and "YES" in t2, t2)
+    check("bot: summary at the menu price (₱120 per 1,000), asks YES", "1,000 TikTok Followers HQ" in t2 and "https://www.tiktok.com/@juan" in t2
+          and "Total: ₱120.00" in t2 and "YES" in t2, t2)
     await fb_send("p1", "yes")
     sent3 = await fb_wait("p1", 3)
     btn = sent3[2]["message"].get("attachment", {}).get("payload", {}).get("buttons", [{}])[0]
     tp = (await sql("select id, amount_php, checkout_id, bot_order from topups where bot_chat_id is not null order by created_at desc limit 1"))
-    check("bot: payment link button for the order (minimum ₱20)", btn.get("type") == "web_url" and btn.get("title", "").startswith("Pay ₱")
-          and tp and tp[0]["amount_php"] >= 20 and tp[0]["bot_order"], (sent3[2], tp))
+    check("bot: payment link button for exactly the total", btn.get("type") == "web_url" and btn.get("title") == "Pay ₱120.00"
+          and tp and tp[0]["amount_php"] == 120 and tp[0]["bot_order"], (sent3[2], tp))
     await bm.post("/_pm_pay", data={"sid": tp[0]["checkout_id"], "amount_php": tp[0]["amount_php"]})
     raw, hdr = signed(paid_event(str(tp[0]["id"]), tp[0]["amount_php"]))
     await c.post("/webhooks/paymongo", content=raw, headers=hdr)
     sent4 = await fb_wait("p1", 4)
-    corder = await sql("select o.id, o.source, o.quantity, o.service_id, o.link from orders o join bot_chats b on b.user_id = o.user_id where b.external_id = 'p1'")
-    check("bot: paid → order placed automatically and confirmed in chat", len(corder) == 1 and corder[0]["source"] == "chat"
-          and corder[0]["quantity"] == 1000 and corder[0]["service_id"] == 2 and f"#{corder[0]['id']}" in fb_text(sent4[3]), (corder, sent4[-1]))
+    corder = await sql("""select o.id, o.source, o.quantity, o.price_php, o.label, o.provider_order_id, s.provider_service_id
+                            from orders o join bot_chats b on b.user_id = o.user_id join services s on s.id = o.service_id
+                           where b.external_id = 'p1'""")
+    check("bot: paid → sent to that SMMGen service at the menu price, confirmed in chat", len(corder) == 1 and corder[0]["source"] == "chat"
+          and corder[0]["quantity"] == 1000 and corder[0]["provider_service_id"] == 2 and float(corder[0]["price_php"]) == 120
+          and corder[0]["label"] == "TikTok Followers HQ" and corder[0]["provider_order_id"] and f"#{corder[0]['id']}" in fb_text(sent4[3]), (corder, sent4[-1]))
     paid_again = (await sql("select bot_order from topups where id = :i", {"i": tp[0]["id"]}))[0]["bot_order"]
     await c.post("/webhooks/paymongo", content=raw, headers=hdr)
     await asyncio.sleep(0.5)
@@ -711,7 +733,7 @@ async def main():
     await bm.post("/_llm_script", json={"answers": [{"intent": "status", "lang": "en"}]})
     await fb_send("p1", "status of my order?")
     sent5 = await fb_wait("p1", 5)
-    check("bot: order status from the real orders", f"#{corder[0]['id']}" in fb_text(sent5[4]) and "Pending" in fb_text(sent5[4]), sent5[-1])
+    check("bot: order status by menu name", f"#{corder[0]['id']} TikTok Followers HQ" in fb_text(sent5[4]) and "Pending" in fb_text(sent5[4]), sent5[-1])
 
     # spam twice in a row → silenced; nothing more is sent, no more AI calls
     await bm.post("/_llm_script", json={"answers": [{"intent": "spam", "lang": "en"}, {"intent": "spam", "lang": "en"}]})
@@ -734,15 +756,24 @@ async def main():
 
     # test chat in the control panel: same engine, no payment link, no order
     await bm.post("/_llm_script", json={"answers": [
-        {"intent": "order", "lang": "en", "platform": "tiktok", "category": "Followers", "quantity": 500},
-        {"intent": "choose", "option": 1}, {"intent": "yes"}]})
+        {"intent": "price", "lang": "en", "item": 1, "quantity": 0},
+        {"intent": "order", "lang": "en", "quantity": 0},
+        {"intent": "order", "lang": "en", "quantity": 50},
+        {"intent": "yes"}]})
     n_tp = len(await sql("select id from topups"))
-    r1 = (await ca.post("/admin/api/bot/test", json={"session": "tst1", "text": "500 tiktok followers https://tiktok.com/@me"})).json()
-    r2 = (await ca.post("/admin/api/bot/test", json={"session": "tst1", "text": "1"})).json()
+    r1 = (await ca.post("/admin/api/bot/test", json={"session": "tst1", "text": "how much tiktok followers"})).json()
+    r2 = (await ca.post("/admin/api/bot/test", json={"session": "tst1", "text": "500"})).json()
+    r2b = (await ca.post("/admin/api/bot/test", json={"session": "tst1", "text": "50 https://tiktok.com/@me"})).json()
     r3 = (await ca.post("/admin/api/bot/test", json={"session": "tst1", "text": "yes"})).json()
-    check("bot: test chat walks the same steps without paying or ordering", "1)" in r1["replies"][0]["text"]
-          and "Total: ₱" in r2["replies"][0]["text"] and "Test mode" in r3["replies"][0]["text"]
-          and len(await sql("select id from topups")) == n_tp and r1["debug"]["ai"]["intent"] == "order", (r1, r2, r3))
+    check("bot: test chat: price per N, then how many, then the link", "TikTok Followers: ₱50.00 per 1,000" in r1["replies"][0]["text"]
+          and "How many? (100 to 50,000)" in r1["replies"][0]["text"] and "Send the link" in r2["replies"][0]["text"], (r1, r2))
+    check("bot: below SMMGen's minimum → asks again", "100 to 50,000 only" in r2b["replies"][0]["text"], r2b)
+    check("bot: test mode never pays or orders", "Test mode" not in r3["replies"][0]["text"] or len(await sql("select id from topups")) == n_tp, r3)
+    await bm.post("/_llm_script", json={"answers": [{"intent": "order", "lang": "en", "item": 1, "quantity": 500}, {"intent": "yes"}]})
+    r4 = (await ca.post("/admin/api/bot/test", json={"session": "tst1", "text": "500 tiktok followers https://tiktok.com/@me"})).json()
+    r5 = (await ca.post("/admin/api/bot/test", json={"session": "tst1", "text": "yes"})).json()
+    check("bot: 500 at ₱50 per 1,000 = ₱25.00; YES in test mode makes no payment", "Total: ₱25.00" in r4["replies"][0]["text"]
+          and "Test mode" in r5["replies"][0]["text"] and len(await sql("select id from topups")) == n_tp, (r4, r5))
     await ca.post("/admin/api/bot/test/reset", json={"session": "tst1"})
     check("bot: test chat reset", not await sql("select id from bot_chats where external_id = 'tst1'"))
     r = await c.post("/admin/api/bot/test", json={"session": "tst2", "text": "hi"})

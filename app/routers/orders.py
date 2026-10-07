@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import math
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -114,6 +115,68 @@ async def place_order(user_id: int, service_id: int, link: str, quantity: int, c
         raise HTTPException(400, f"Order rejected by provider: {err}")
     if outcome == "needs_review":
         raise HTTPException(502, "Couldn't confirm the order with our provider. Support will check it.")
+    return result
+
+
+# ------------------------------------------------------------------ Messenger bot menu orders
+
+async def chat_item(db, item_id: int) -> dict | None:
+    """A bot menu item with its SMMGen service (min, max, type, cost), or None if it can't be ordered."""
+    return await db.fetch_one("""
+        select m.id, m.name, m.per_qty, m.price_php, m.provider_service_id, m.active,
+               p.id as provider_id, ps.name as provider_name, ps.min_qty, ps.max_qty, ps.rate, ps.type, p.currency
+          from bot_menu m
+          join providers p on p.active
+          join provider_services ps on ps.provider_id = p.id and ps.provider_service_id = m.provider_service_id
+         where m.id = :id
+         order by p.id limit 1
+    """, {"id": item_id})
+
+
+def chat_price(item: dict, quantity: int) -> float:
+    """The menu price for this many (price per N, pro rata), rounded up to the centavo."""
+    return math.ceil(round(float(item["price_php"]) * quantity / item["per_qty"] * 100, 6)) / 100
+
+
+async def place_chat_order(user_id: int, item_id: int, link: str, quantity: int) -> dict:
+    """Charge and place a Messenger order for a bot menu item: the owner's price, sent straight to the
+    item's SMMGen service. Same queue, status sync, refunds and cancellations as website orders."""
+    async with transaction() as db:
+        item = await chat_item(db, item_id)
+        if not item or not item["active"]:
+            raise HTTPException(404, "That item isn't available right now")
+        if (item["type"] or "").strip().lower() == CUSTOM_COMMENTS:
+            raise HTTPException(400, "That item needs typed comments; it can't be ordered in chat")
+        if not item["min_qty"] <= quantity <= item["max_qty"]:
+            raise HTTPException(400, f"Quantity must be between {item['min_qty']:,} and {item['max_qty']:,}")
+        price = chat_price(item, quantity)
+        # the site record for this SMMGen service (every one is imported; make a hidden one if not)
+        sid = await db.fetch_val("""select id from services where provider_id = :p and provider_service_id = :ps
+                                     order by auto desc, id limit 1""", {"p": item["provider_id"], "ps": item["provider_service_id"]})
+        if not sid:
+            sid = await db.fetch_val("""insert into services (provider_id, provider_service_id, platform, category, name, tier, hidden)
+                                        values (:p, :ps, 'other', 'Chat', :n, 'Chat', true) returning id""",
+                                     {"p": item["provider_id"], "ps": item["provider_service_id"], "n": item["name"]})
+        await db.execute("select id from users where id = :u for update", {"u": user_id})
+        if await balance_of(db, user_id) < price:
+            raise HTTPException(402, "Not enough balance")
+        queued = await order_queue.should_queue(db)
+        order = await db.fetch_one("""
+            insert into orders (user_id, service_id, provider_id, link, quantity, price_php, source, status, label)
+            values (:u, :s, :p, :l, :q, :price, 'chat', :st, :label) returning id
+        """, {"u": user_id, "s": sid, "p": item["provider_id"], "l": link, "q": quantity, "price": price,
+              "st": "queued" if queued else "creating", "label": item["name"]})
+        await db.execute("insert into ledger (user_id, delta, reason, ref) values (:u, :d, 'order', :r)",
+                         {"u": user_id, "d": -price, "r": str(order["id"])})
+    result = {"id": order["id"], "status": "pending", "quantity": quantity, "charge_php": price}
+    if queued:
+        kick_queue()
+        return {**result, "queued": True}
+    outcome, err = await _submit(order["id"])
+    if outcome == "failed":
+        raise HTTPException(400, f"Order rejected: {err}")
+    if outcome == "needs_review":
+        raise HTTPException(502, "Couldn't confirm the order. Support will check it.")
     return result
 
 

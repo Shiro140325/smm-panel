@@ -1,12 +1,13 @@
 """Messenger bot conversation engine.
 
-The AI only reads the customer's messages and fills in a small form (what they want, platform,
-category, quantity, link, language). Everything that matters is done here in code: real services and
-prices from the catalog, the next question to ask, the order summary, the payment link, placing the
-order, order status. The AI can't invent a price or a service.
+The bot sells only the owner's bot menu (name, price per N, SMMGen service id), nothing from the
+website catalog. The AI only reads the customer's messages and fills in a small form (what they want,
+which menu item, quantity, link, language). Everything that matters is done here in code: the menu
+prices, the next question, the summary, the payment link, placing the order, order status. The AI
+can't invent a price or an item.
 
-Cheap on tokens: a short instruction, only the last few messages, a compact list of platforms and
-categories, and replies of one or two sentences.
+Cheap on tokens: a short instruction, only the last few messages, the menu item names, and replies
+of one or two sentences.
 """
 import asyncio
 import json
@@ -19,34 +20,27 @@ import time
 from app.bot import llm
 from app.config import get_settings
 from app.db import transaction
-from app.pricing import SERVICE_SELECT, order_price_php, price_per_1k_php
 
 log = logging.getLogger("bot")
 
 HISTORY = 6            # past messages the AI sees
 NOTES_MAX = 1500       # the owner's notes (FAQ, tone), in characters
 LINK_RE = re.compile(r"https?://[^\s<>\"']+")
-PLATFORM_NAMES = {"tiktok": "TikTok", "facebook": "Facebook", "instagram": "Instagram", "youtube": "YouTube", "x": "X",
-                  "telegram": "Telegram", "spotify": "Spotify", "threads": "Threads", "shopee": "Shopee",
-                  "twitch": "Twitch", "kick": "Kick", "linkedin": "LinkedIn", "snapchat": "Snapchat",
-                  "soundcloud": "SoundCloud", "discord": "Discord", "reddit": "Reddit", "pinterest": "Pinterest",
-                  "whatsapp": "WhatsApp"}
 SETTING_KEYS = ("bot_model", "bot_notes", "bot_enabled")
 
 # Fixed wording: (English, Tagalog/Taglish). Short and straight to the point.
 T = {
     "help": ("Hi! Tell me what you need, e.g. \"1k TikTok likes\" + your link.",
              "Hi! Sabihin mo lang kailangan mo, hal. \"1k TikTok likes\" + link mo."),
-    "ask_platform": ("Which platform? TikTok, Facebook, Instagram, YouTube…",
-                     "Saang platform? TikTok, Facebook, Instagram, YouTube…"),
-    "ask_category": ("What do you need for {p}? {cats}", "Ano'ng kailangan mo sa {p}? {cats}"),
-    "none": ("Sorry, we don't have {p} {c} right now.", "Pasensya, wala kaming {p} {c} ngayon."),
-    "options": ("{p} {c}{forq}:\n{lines}\nReply with the number.", "{p} {c}{forq}:\n{lines}\nReply ng number."),
+    "menu": ("Here's what we have:\n{lines}\nWhich one? Reply with the number.",
+             "Ito ang meron kami:\n{lines}\nAlin dito? Reply ng number."),
+    "no_menu": ("Sorry, ordering isn't available right now.", "Pasensya, wala pang pwedeng i-order ngayon."),
     "ask_qty": ("How many? ({mn} to {mx})", "Ilan? ({mn} hanggang {mx})"),
-    "bad_qty": ("{name} takes {mn} to {mx}. How many?", "{name}: {mn} hanggang {mx} lang. Ilan?"),
+    "bad_qty": ("{name}: {mn} to {mx} only. How many?", "{name}: {mn} hanggang {mx} lang. Ilan?"),
+    "price": ("{name}: ₱{price} per {per}.", "{name}: ₱{price} kada {per}."),
     "ask_link": ("Send the link to your post, video or profile.", "Send mo yung link ng post, video o profile mo."),
-    "summary": ("{q} {name} ({tier})\n{link}\nTotal: ₱{total}\nReply YES to get the payment link.",
-                "{q} {name} ({tier})\n{link}\nTotal: ₱{total}\nReply YES para sa payment link."),
+    "summary": ("{q} {name}\n{link}\nTotal: ₱{total}\nReply YES to get the payment link.",
+                "{q} {name}\n{link}\nTotal: ₱{total}\nReply YES para sa payment link."),
     "pay": ("Pay ₱{amt} with GCash, Maya or your bank app. Your order starts once paid.",
             "Bayad ₱{amt} via GCash, Maya o bank app. Sisimulan namin pagkabayad."),
     "pay_extra": (" (₱{extra} extra stays as credit for next time.)", " (Yung ₱{extra} sobra, credit mo na sa susunod.)"),
@@ -83,7 +77,7 @@ def money(x: float) -> str:
     return f"{x:,.2f}"
 
 
-# ------------------------------------------------------------------ settings and catalog
+# ------------------------------------------------------------------ settings and menu
 
 async def read_settings(db) -> dict:
     rows = await db.fetch_all("select key, value from site_settings where key = any(CAST(:k AS text[]))", {"k": list(SETTING_KEYS)})
@@ -103,86 +97,46 @@ async def save_settings(db, model: str | None = None, notes: str | None = None, 
     return await read_settings(db)
 
 
-_catalog: tuple[float, dict] = (0.0, {})
-
-
-async def catalog(db) -> dict:
-    """{platform: {category: [service, ...] cheapest first}} for everything orderable in chat (5-minute cache)."""
-    global _catalog
-    if _catalog[1] and time.monotonic() - _catalog[0] < 300:
-        return _catalog[1]
-    out: dict = {}
-    for r in await db.fetch_all(SERVICE_SELECT):
-        if (r["type"] or "").strip().lower() == "custom comments":   # needs typed comments: website only
-            continue
-        per_1k = price_per_1k_php(r["rate"], r["currency"], r["markup_pct"], r["price_php"])
-        out.setdefault(r["platform"], {}).setdefault(r["category"] or "Other", []).append({
-            "id": r["id"], "name": r["name"], "tier": r["tier"], "min": r["min_qty"], "max": r["max_qty"],
-            "refill_days": r["refill_days"] or 0, "per_1k": per_1k, "start": r["start_time"]})
-    for cats in out.values():
-        for lst in cats.values():
-            lst.sort(key=lambda x: (x["per_1k"], x["id"]))
-    _catalog = (time.monotonic(), out)
+async def menu(db) -> list[dict]:
+    """The bot menu: active items whose SMMGen service exists (and isn't a typed-comments one)."""
+    rows = await db.fetch_all("""
+        select m.id, m.name, m.per_qty, m.price_php, ps.min_qty as min, ps.max_qty as max
+          from bot_menu m
+          join provider_services ps on ps.provider_service_id = m.provider_service_id
+          join providers p on p.id = ps.provider_id and p.active
+         where m.active and lower(coalesce(ps.type, '')) <> 'custom comments'
+         order by m.sort, m.id
+    """)
+    seen, out = set(), []
+    for r in rows:   # one row per item even if two providers list the same id
+        if r["id"] not in seen:
+            seen.add(r["id"])
+            out.append({**dict(r), "price_php": float(r["price_php"])})
     return out
 
 
-def catalog_text(cat: dict) -> str:
-    """Compact list for the AI: one line per platform, biggest platforms first."""
-    plats = sorted(cat, key=lambda p: -sum(len(v) for v in cat[p].values()))
-    return "\n".join(f"{p}: {', '.join(sorted(cat[p], key=lambda c: -len(cat[p][c]))[:14])}" for p in plats[:14])
+def menu_text(items: list[dict]) -> str:
+    """For the AI: number and name only (no prices, so it can't quote one)."""
+    return "\n".join(f"{i}: {m['name']}" for i, m in enumerate(items, 1))
 
 
-def options_for(services: list[dict], qty: int | None) -> list[dict]:
-    """Up to 3 choices: the cheapest, the cheapest with refill, the cheapest PH / HQ one."""
-    fit = [s for s in services if not qty or s["min"] <= qty <= s["max"]] or services
-    picks = []
-    for test in (lambda s: True, lambda s: s["refill_days"] > 0, lambda s: "PH" in (s["tier"] or "") or "HQ" in (s["tier"] or "")):
-        s = next((x for x in fit if test(x) and x not in picks), None)
-        if s:
-            picks.append(s)
-    for s in fit:   # fill up to 3 if the categories above gave fewer
-        if len(picks) >= 3:
-            break
-        if s not in picks:
-            picks.append(s)
-    return picks[:3]
+def menu_lines(items: list[dict], lang: str) -> str:
+    kada = "kada" if lang == "tl" else "per"
+    return "\n".join(f"{i}) {m['name']} · ₱{money(m['price_php'])} {kada} {m['per_qty']:,}" for i, m in enumerate(items, 1))
 
 
-def find_service(cat: dict, sid: int) -> dict | None:
-    for cats in cat.values():
-        for lst in cats.values():
-            for s in lst:
-                if s["id"] == sid:
-                    return s
-    return None
-
-
-def _norm_platform(cat: dict, p: str) -> str:
-    p = (p or "").strip().lower()
-    if p in cat:
-        return p
-    for key, name in PLATFORM_NAMES.items():
-        if p == name.lower() and key in cat:
-            return key
-    return ""
-
-
-def _norm_category(cat: dict, platform: str, c: str) -> str:
-    c = (c or "").strip().lower()
-    for name in cat.get(platform, {}):
-        if c and (name.lower() == c or name.lower().rstrip("s") == c.rstrip("s")):
-            return name
-    return ""
+def item_total(item: dict, qty: int) -> float:
+    return math.ceil(round(item["price_php"] * qty / item["per_qty"] * 100, 6)) / 100
 
 
 # ------------------------------------------------------------------ the turn
 
 SYSTEM = """You read Messenger messages sent to SMM Shiro, a Philippine shop selling social media followers, likes, views and more.
-Answer ONLY with JSON: {{"intent":"","lang":"en","platform":"","category":"","quantity":0,"link":"","option":0,"order_id":0,"reply":""}}
-intent: order (wants to buy) | price (asks how much) | choose (picks an option number) | yes (agrees/confirms) | no (declines or drops the current order) | status (asks about their orders) | cancel_order (wants a placed order canceled; set order_id) | balance (asks their credit) | question | greeting | spam (nonsense, random or unrelated messages).
-platform/category: ONLY these exact names, or "":
-{catalog}
-quantity: a number (1k=1000). link: the URL exactly. lang: "tl" if Tagalog/Taglish, else "en".
+Answer ONLY with JSON: {{"intent":"","lang":"en","item":0,"quantity":0,"order_id":0,"reply":""}}
+intent: order (wants to buy) | price (asks how much) | menu (asks what's available) | choose (picks an item number) | yes (agrees/confirms) | no (declines or drops the current order) | status (asks about their orders) | cancel_order (wants a placed order canceled; set order_id) | balance (asks their credit) | question | greeting | spam (nonsense, random or unrelated messages).
+item: the number of the matching menu item below, or 0 if unclear:
+{menu}
+quantity: a number (1k=1000). lang: "tl" if Tagalog/Taglish, else "en".
 reply: only for question/greeting, one short friendly sentence in the customer's language (Taglish if they use it), never a price or a made-up fact; otherwise "".{notes}
 Current draft: {draft}"""
 
@@ -201,11 +155,12 @@ async def respond(db, chat: dict, texts: list[str], test: bool = False, before_i
     draft = dict(st.get("draft") or {})
     lang = st.get("lang") or "en"
     settings = await read_settings(db)
-    cat = await catalog(db)
+    items = await menu(db)
     joined = "\n".join(texts)
     notes = f"\nShop notes (use for questions): {settings['notes']}" if settings["notes"] else ""
-    shown = {k: draft[k] for k in ("platform", "category", "quantity", "link") if draft.get(k)}
-    system = SYSTEM.format(catalog=catalog_text(cat), notes=notes, draft=json.dumps(shown, ensure_ascii=False) if shown else "none")
+    shown = {k: draft[k] for k in ("item_name", "quantity", "link") if draft.get(k)}
+    system = SYSTEM.format(menu=menu_text(items) or "(empty)", notes=notes,
+                           draft=json.dumps(shown, ensure_ascii=False) if shown else "none")
     history = await _history(db, chat["id"], before_id)
     usage = {}
     try:
@@ -240,96 +195,75 @@ async def respond(db, chat: dict, texts: list[str], test: bool = False, before_i
         out.append({"text": await _cancel(db, chat, ai, lang)})
     elif intent == "yes" and draft.get("step") == "confirm":
         out.extend(await _checkout(db, chat, draft, lang, test))
+    elif intent == "menu":
+        out.append({"text": t("menu", lang, lines=menu_lines(items, lang)) if items else t("no_menu", lang)})
+        if items:
+            draft["step"] = "choose"
     elif intent in ("question", "greeting") and not _has_order_info(ai, joined):
         if draft.get("step") == "await_payment":
             out.append({"text": t("await_pay", lang, amt=money(draft.get("pay_amount") or 0))})
         else:
             out.append({"text": str(ai.get("reply") or "").strip()[:300] or t("help", lang)})
     else:   # order / price / choose / yes (outside a confirm) / anything carrying order details
-        _merge(cat, draft, ai, joined)
-        out.append({"text": _next_step(cat, draft, lang, price_only=intent == "price")})
+        _merge(items, draft, ai, joined)
+        out.append({"text": _next_step(items, draft, lang, price_only=intent == "price")})
     return await _save(db, chat, st, draft, out, debug)
 
 
 def _has_order_info(ai: dict, text: str) -> bool:
-    return bool(ai.get("platform") or ai.get("category") or LINK_RE.search(text))
+    return bool(ai.get("item") or LINK_RE.search(text))
 
 
-def _merge(cat: dict, draft: dict, ai: dict, text: str) -> None:
+def _merge(items: list[dict], draft: dict, ai: dict, text: str) -> None:
     if draft.get("step") == "await_payment":   # a new request replaces an unpaid one
         draft.clear()
-    p = _norm_platform(cat, ai.get("platform"))
-    if p and p != draft.get("platform"):
-        draft.update(platform=p, category=None, service_id=None, options=None)
-    c = _norm_category(cat, draft.get("platform") or "", ai.get("category"))
-    if c and c != draft.get("category"):
-        draft.update(category=c, service_id=None, options=None)
-    try:
-        q = int(float(ai.get("quantity") or 0))
-    except (TypeError, ValueError):
-        q = 0
-    if q > 0:
-        draft["quantity"] = q
-    m = LINK_RE.search(text)   # the link from the customer's own words, never retyped by the AI
-    if m:
-        draft["link"] = m.group(0).rstrip(".,)")
-    opts = draft.get("options") or []
-    pick = ai.get("option")
-    if not pick and opts and text.strip().isdigit():
+    pick = ai.get("item")
+    if not pick and draft.get("step") == "choose" and text.strip().isdigit():
         pick = int(text.strip())
     try:
         pick = int(pick or 0)
     except (TypeError, ValueError):
         pick = 0
-    if opts and 1 <= pick <= len(opts):
-        draft["service_id"] = opts[pick - 1]
+    if 1 <= pick <= len(items) and items[pick - 1]["id"] != draft.get("item_id"):
+        draft.update(item_id=items[pick - 1]["id"], item_name=items[pick - 1]["name"])
+    try:
+        q = int(float(ai.get("quantity") or 0))
+    except (TypeError, ValueError):
+        q = 0
+    if q <= 0 and draft.get("item_id") and draft.get("step") == "collect" and text.strip().replace(",", "").isdigit():
+        q = int(text.strip().replace(",", ""))   # a bare number answering "how many?"
+    if q > 0:
+        draft["quantity"] = q
+    m = LINK_RE.search(text)   # the link from the customer's own words, never retyped by the AI
+    if m:
+        draft["link"] = m.group(0).rstrip(".,)")
 
 
-def _next_step(cat: dict, draft: dict, lang: str, price_only: bool = False) -> str:
+def _next_step(items: list[dict], draft: dict, lang: str, price_only: bool = False) -> str:
     """Ask for the next missing piece, or show the summary."""
+    if not items:
+        draft.clear()
+        return t("no_menu", lang)
+    item = next((m for m in items if m["id"] == draft.get("item_id")), None)
+    if not item:
+        draft.pop("item_id", None)
+        draft["step"] = "choose"
+        return t("menu", lang, lines=menu_lines(items, lang))
     draft["step"] = "collect"
-    p = draft.get("platform")
-    if not p:
-        return t("ask_platform", lang)
-    pname = PLATFORM_NAMES.get(p, p.title())
-    c = draft.get("category")
-    if not c:
-        cats = sorted(cat.get(p, {}), key=lambda x: -len(cat[p][x]))[:6]
-        return t("ask_category", lang, p=pname, cats=", ".join(cats) + "…")
-    services = cat.get(p, {}).get(c, [])
-    if not services:
-        draft["category"] = None
-        return t("none", lang, p=pname, c=c)
     qty = draft.get("quantity")
-    svc = find_service(cat, draft["service_id"]) if draft.get("service_id") else None
-    if not svc:
-        opts = options_for(services, qty)
-        if len(opts) == 1:
-            svc = opts[0]
-            draft["service_id"] = svc["id"]
-        else:
-            draft["options"] = [o["id"] for o in opts]
-            draft["step"] = "choose"
-            lines = "\n".join(f"{i}) {_label(o, lang)} · ₱{money(order_price_php(o['per_1k'], qty)) if qty else money(o['per_1k']) + '/1k'}"
-                              for i, o in enumerate(opts, 1))
-            return t("options", lang, p=pname, c=c, forq=f" ×{qty:,}" if qty else "", lines=lines)
     if not qty:
-        return t("ask_qty", lang, mn=f"{svc['min']:,}", mx=f"{svc['max']:,}")
-    if not svc["min"] <= qty <= svc["max"]:
-        return t("bad_qty", lang, name=svc["name"], mn=f"{svc['min']:,}", mx=f"{svc['max']:,}")
+        head = t("price", lang, name=item["name"], price=money(item["price_php"]), per=f"{item['per_qty']:,}") + " " if price_only else ""
+        return head + t("ask_qty", lang, mn=f"{item['min']:,}", mx=f"{item['max']:,}")
+    if not item["min"] <= qty <= item["max"]:
+        draft.pop("quantity", None)
+        return t("bad_qty", lang, name=item["name"], mn=f"{item['min']:,}", mx=f"{item['max']:,}")
+    total = item_total(item, qty)
     if not draft.get("link"):
         if price_only:
-            return f"{svc['name']} ×{qty:,}: ₱{money(order_price_php(svc['per_1k'], qty))}. " + t("ask_link", lang)
+            return f"{qty:,} {item['name']}: ₱{money(total)}. " + t("ask_link", lang)
         return t("ask_link", lang)
-    total = order_price_php(svc["per_1k"], qty)
     draft.update(step="confirm", total=total)
-    return t("summary", lang, q=f"{qty:,}", name=svc["name"], tier=_label(svc, lang), link=draft["link"], total=money(total))
-
-
-def _label(s: dict, lang: str) -> str:
-    refill = (f"{s['refill_days']}-day refill" if lang == "en" else f"may refill {s['refill_days']} araw") if s["refill_days"] else \
-        ("no refill" if lang == "en" else "walang refill")
-    return f"{s['tier']}, {refill}"
+    return t("summary", lang, q=f"{qty:,}", name=item["name"], link=draft["link"], total=money(total))
 
 
 async def _credit(db, chat: dict) -> float:
@@ -341,7 +275,8 @@ async def _credit(db, chat: dict) -> float:
 async def _status(db, chat: dict, lang: str) -> str:
     if not chat.get("user_id"):
         return t("no_orders", lang)
-    rows = await db.fetch_all("""select o.id, o.quantity, o.status, s.name from orders o join services s on s.id = o.service_id
+    rows = await db.fetch_all("""select o.id, o.quantity, o.status, coalesce(o.label, s.name) as name from orders o
+                                    join services s on s.id = o.service_id
                                   where o.user_id = :u order by o.id desc limit 5""", {"u": chat["user_id"]})
     if not rows:
         return t("no_orders", lang)
@@ -366,7 +301,7 @@ async def _cancel(db, chat: dict, ai: dict, lang: str) -> str:
 async def _checkout(db, chat: dict, draft: dict, lang: str, test: bool) -> list[dict]:
     """The customer said YES to the summary: pay from credit, or a payment link for the difference."""
     total = float(draft.get("total") or 0)
-    order = {"service_id": draft["service_id"], "link": draft["link"], "quantity": draft["quantity"]}
+    order = {"item_id": draft["item_id"], "link": draft["link"], "quantity": draft["quantity"]}
     if test:
         draft.clear()
         return [{"text": t("test_pay", lang, amt=money(total))}]
@@ -395,9 +330,9 @@ async def _checkout(db, chat: dict, draft: dict, lang: str, test: bool) -> list[
 
 async def _place(user_id: int, order: dict) -> dict:
     from fastapi import HTTPException
-    from app.routers.orders import place_order
+    from app.routers.orders import place_chat_order
     try:
-        return await place_order(user_id, order["service_id"], order["link"], order["quantity"], source="chat")
+        return await place_chat_order(user_id, order["item_id"], order["link"], order["quantity"])
     except HTTPException as e:
         return {"error": str(e.detail)}
 

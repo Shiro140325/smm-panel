@@ -307,12 +307,29 @@ async function renderBot() {
   const ready = su.openrouter && su.meta_token && su.meta_secret && su.verify_token;
   const tick = (ok, label, hint) => `<li class="${ok ? "ok" : ""}">${ok ? icons.check(16) : "○"} <span>${label}${ok ? "" : ` <span class="muted">· ${hint}</span>`}</span></li>`;
   $("bot").innerHTML = `
+    <section class="card panel bot-card" style="margin-bottom:18px">
+      <div class="bot-row"><h3>Bot menu</h3><button type="button" class="btn btn-secondary btn-sm" id="menu-add">Add item</button></div>
+      <p class="hint" style="margin:0">The only things the bot sells, at your price, sent straight to the SMMGen service you pick. Nothing from the website's catalog, tiers or discounts.</p>
+      <form class="menu-form hidden" id="menu-form" novalidate>
+        <div class="menu-fields">
+          <div class="field"><label for="mf-name">Name customers see</label><input class="input" id="mf-name" maxlength="60" placeholder="TikTok Followers"></div>
+          <div class="field"><label for="mf-price">Price (₱)</label><input class="input" id="mf-price" type="number" step="0.01" min="0.01" placeholder="50"></div>
+          <div class="field"><label for="mf-per">Per how many</label><input class="input" id="mf-per" type="number" min="1" value="1000"></div>
+          <div class="field"><label for="mf-sid">SMMGen service ID</label><input class="input" id="mf-sid" type="number" min="1" placeholder="e.g. 4521"></div>
+        </div>
+        <div class="hint" id="mf-info" style="margin:0"></div>
+        <div class="bot-row"><label class="check" style="margin:0"><input type="checkbox" id="mf-active" checked> <span>On the menu</span></label>
+          <span><button type="button" class="btn btn-ghost btn-sm" id="mf-cancel">Cancel</button>
+          <button type="submit" class="btn btn-primary btn-sm" id="mf-save">Save item</button></span></div>
+      </form>
+      <div id="menu-list"><p class="hint" style="margin:0">Loading…</p></div>
+    </section>
     <div class="bot-grid">
       <div class="bot-col">
         <section class="card panel bot-card">
           <h3>Test chat</h3>
           <p class="hint" style="margin:0">Chat as a customer to see exactly what the bot replies. Test mode: no payment link, no order.</p>
-          <div class="bot-log" id="bot-log"><div class="muted bot-empty">Say something like “pa 1k likes sa tiktok ko”.</div></div>
+          <div class="bot-log" id="bot-log"><div class="muted bot-empty">Add menu items above, then say something like “pa 1k followers sa tiktok”.</div></div>
           <form class="bot-send" id="bot-form"><input class="input" id="bot-in" autocomplete="off" maxlength="800" placeholder="Type as a customer…">
             <button class="btn btn-primary" type="submit" id="bot-go">Send</button></form>
           <div class="bot-row"><span class="hint" id="bot-draft"></span><button type="button" class="btn btn-ghost btn-sm" id="bot-reset">New test chat</button></div>
@@ -350,7 +367,7 @@ async function renderBot() {
             <textarea class="textarea" id="bot-notes" rows="7" maxlength="1500" placeholder="Facts it can use to answer questions, e.g.&#10;- Orders usually start within 1 hour.&#10;- Undelivered amounts become credit.&#10;- We don't need passwords, only the public link.&#10;- Be friendly, use Taglish if the customer does.">${esc(s.notes)}</textarea>
             <span class="hint" id="bot-notes-count"></span></div>
           <button type="button" class="btn btn-primary" id="bot-save">Save</button>
-          <p class="hint" style="margin:0">Prices, services and payment always come from your catalog, never from the AI. Notes are sent with every reply, so keep them short.</p>
+          <p class="hint" style="margin:0">Prices, services and payment always come from your bot menu, never from the AI. Notes are sent with every reply, so keep them short.</p>
         </section>
         <section class="card panel bot-card">
           <h3>Usage</h3>
@@ -363,6 +380,74 @@ async function renderBot() {
         </section>
       </div>
     </div>`;
+
+  /* bot menu */
+  let editing = null, menuItems = [];
+  const loadMenu = async () => {
+    try { menuItems = await call("/admin/api/bot/menu"); } catch (e) { $("menu-list").innerHTML = `<p class="hint">${esc(e.message)}</p>`; return; }
+    $("menu-list").innerHTML = menuItems.length ? `<div class="table-scroll"><table class="table menu-table"><thead><tr>
+        <th>#</th><th>Item</th><th class="num">Your price</th><th>SMMGen service</th><th class="num">Your cost</th><th class="num">Profit</th><th></th></tr></thead><tbody>
+      ${menuItems.map((m, i) => {
+        const g = m.smmgen, profit = g && g.cost_php != null ? m.price_php - g.cost_php : null;
+        return `<tr class="${m.active ? "" : "muted"}">
+          <td class="muted menu-n">${i + 1}</td>
+          <td class="menu-name"><strong>${esc(m.name)}</strong>${m.active ? "" : ` <span class="badge badge-canceled">Off</span>`}</td>
+          <td class="num" data-k="Price">₱${m.price_php.toFixed(2)} <span class="muted">/ ${num(m.per_qty)}</span></td>
+          <td data-k="SMMGen"><span class="mono">#${m.provider_service_id}</span><div class="hint" style="margin:2px 0 0;max-width:300px">${g ? `${esc(g.name)} · ${num(g.min)}–${num(g.max)}` : `<span style="color:var(--bad)">Not found at SMMGen</span>`}</div></td>
+          <td class="num" data-k="Your cost">${g && g.cost_php != null ? `₱${g.cost_php.toFixed(2)}` : "–"}</td>
+          <td class="num" data-k="Profit">${profit == null ? "–" : `<strong style="color:${profit < 0 ? "var(--bad)" : "inherit"}">₱${profit.toFixed(2)}</strong>`}</td>
+          <td class="menu-acts" style="white-space:nowrap"><button type="button" class="btn btn-ghost btn-sm" data-medit="${m.id}">Edit</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-mdel="${m.id}">Remove</button></td></tr>`;
+      }).join("")}</tbody></table></div>
+      <p class="hint" style="margin:6px 0 0">Cost and profit are per the "per" amount, at today's SMMGen rate. Customers can order any amount within SMMGen's min–max; the price scales.</p>`
+      : `<p class="hint" style="margin:0">No items yet. Add what the bot should sell.</p>`;
+    $("menu-list").querySelectorAll("[data-medit]").forEach((b) => b.addEventListener("click", () => openForm(menuItems.find((x) => x.id === Number(b.dataset.medit)))));
+    $("menu-list").querySelectorAll("[data-mdel]").forEach((b) => b.addEventListener("click", async () => {
+      if (!b.classList.contains("armed")) { b.classList.add("armed"); b.textContent = "Tap again"; return; }
+      try { await call(`/admin/api/bot/menu/${b.dataset.mdel}`, { method: "DELETE" }); toast("Removed from the menu"); } catch (e) { toast(e.message, { bad: true }); }
+      loadMenu();
+    }));
+  };
+  const lookup = debounce(async () => {
+    const id = Number($("mf-sid").value), per = Number($("mf-per").value) || 1000;
+    if (!id) { $("mf-info").textContent = ""; return; }
+    try {
+      const g = await call(`/admin/api/bot/lookup?id=${id}&per_qty=${per}`);
+      const price = Number($("mf-price").value);
+      $("mf-info").innerHTML = `SMMGen #${g.provider_service_id}: <strong>${esc(g.name)}</strong> · min ${num(g.min_qty)}, max ${num(g.max_qty)} · your cost ₱${g.cost_php.toFixed(2)} per ${num(per)}`
+        + (g.custom_comments ? ` · <span style="color:var(--bad)">needs typed comments: can't be sold in chat</span>`
+          : price ? ` · profit <strong style="color:${price < g.cost_php ? "var(--bad)" : "inherit"}">₱${(price - g.cost_php).toFixed(2)}</strong>${price < g.cost_php ? " (below cost!)" : ""}` : "");
+    } catch (e) { $("mf-info").innerHTML = `<span style="color:var(--bad)">${esc(e.message)}</span>`; }
+  }, 400);
+  ["mf-sid", "mf-per", "mf-price"].forEach((id) => $(id).addEventListener("input", lookup));
+  const openForm = (m) => {
+    editing = m ? m.id : null;
+    $("mf-name").value = m ? m.name : ""; $("mf-price").value = m ? m.price_php : ""; $("mf-per").value = m ? m.per_qty : 1000;
+    $("mf-sid").value = m ? m.provider_service_id : ""; $("mf-active").checked = m ? m.active : true;
+    $("mf-save").textContent = m ? "Save changes" : "Save item";
+    $("menu-form").classList.remove("hidden");
+    $("mf-info").textContent = "";
+    if (m) lookup();
+    $("mf-name").focus();
+  };
+  $("menu-add").onclick = () => openForm(null);
+  $("mf-cancel").onclick = () => { $("menu-form").classList.add("hidden"); editing = null; };
+  $("menu-form").onsubmit = async (ev) => {
+    ev.preventDefault();
+    const body = { name: $("mf-name").value.trim(), price_php: Number($("mf-price").value), per_qty: Number($("mf-per").value),
+      provider_service_id: Number($("mf-sid").value), active: $("mf-active").checked,
+      sort: editing ? (menuItems.find((x) => x.id === editing)?.sort || 0) : menuItems.length };
+    if (body.name.length < 2 || !(body.price_php > 0) || !(body.per_qty > 0) || !body.provider_service_id) { toast("Fill in all four fields", { bad: true }); return; }
+    $("mf-save").disabled = true;
+    try {
+      await call(editing ? `/admin/api/bot/menu/${editing}` : "/admin/api/bot/menu", { method: editing ? "PUT" : "POST", body });
+      toast(editing ? "Item updated" : "Added to the menu");
+      $("menu-form").classList.add("hidden"); editing = null;
+      loadMenu();
+    } catch (e) { toast(e.message, { bad: true }); }
+    $("mf-save").disabled = false;
+  };
+  loadMenu();
 
   /* settings */
   const paintCount = () => { $("bot-notes-count").textContent = `${$("bot-notes").value.length} / 1500 characters`; };
@@ -387,7 +472,7 @@ async function renderBot() {
     log.scrollTop = log.scrollHeight;
   };
   const paintDraft = (dr) => {
-    const parts = [dr.platform, dr.category, dr.quantity && `×${num(dr.quantity)}`, dr.link && "link ✓", dr.step].filter(Boolean);
+    const parts = [dr.item_name, dr.quantity && `×${num(dr.quantity)}`, dr.link && "link ✓", dr.step].filter(Boolean);
     $("bot-draft").textContent = parts.length ? `Draft: ${parts.join(" · ")}` : "";
   };
   $("bot-form").onsubmit = async (ev) => {
@@ -400,7 +485,7 @@ async function renderBot() {
     try {
       const r = await call("/admin/api/bot/test", { method: "POST", body: { session: botSessionId(), text } });
       const a = r.debug.ai || {};
-      const understood = a.intent ? `understood: ${esc(a.intent)}${a.platform ? ` · ${esc(a.platform)}` : ""}${a.category ? ` ${esc(a.category)}` : ""}${a.quantity ? ` ×${num(a.quantity)}` : ""}` : "";
+      const understood = a.intent ? `understood: ${esc(a.intent)}${a.item ? ` · item ${num(a.item)}` : ""}${a.quantity ? ` ×${num(a.quantity)}` : ""}` : "";
       const cost = r.debug.tokens_in != null ? ` · ${num((r.debug.tokens_in || 0) + (r.debug.tokens_out || 0))} tokens${r.debug.cost_usd != null ? ` · ${php(r.debug.cost_usd)}` : ""}` : "";
       if (!r.replies.length) bubble("out", "(no reply: the bot silenced this chat as spam)", understood + cost);
       r.replies.forEach((m, i) => bubble("out", m.text + (m.button ? `\n[${m.button.title}]` : ""), i === 0 ? understood + cost : ""));
