@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from app import announcement, fx, order_queue, tiers, totp
+from app.bot import engine as bot_engine
 from app.config import get_settings
 from app.db import DB, get_db, transaction
 from app.providers.smm_client import SMMClient
@@ -49,7 +50,7 @@ async def _totp_row(db):
     return await db.fetch_one("select secret, confirmed_at, last_step from admin_totp where id = 1")
 
 
-async def require_admin(request: Request, db: DB = Depends(get_db)) -> None:
+async def require_admin(request: Request, db: DB = Depends(get_db, scope="function")) -> None:
     if not _admin_pass():
         raise HTTPException(503, "Admin panel is off: set ADMIN_PASS on the server")
     token = request.cookies.get(COOKIE)
@@ -94,7 +95,7 @@ class LoginIn(BaseModel):
 
 
 @router.post("/login")
-async def login(body: LoginIn, request: Request, response: Response, db: DB = Depends(get_db)):
+async def login(body: LoginIn, request: Request, response: Response, db: DB = Depends(get_db, scope="function")):
     """Step 1: the admin password. Then the authenticator code (or, before it's set up, the setup screen)."""
     expected = _admin_pass()
     if not expected:
@@ -124,7 +125,7 @@ class CodeIn(BaseModel):
 
 
 @router.post("/login/totp")
-async def login_totp(body: CodeIn, request: Request, response: Response, db: DB = Depends(get_db)):
+async def login_totp(body: CodeIn, request: Request, response: Response, db: DB = Depends(get_db, scope="function")):
     """Step 2: the 6-digit code from the authenticator app, or a one-time backup code."""
     try:
         payload = jwt.decode(request.cookies.get(PENDING) or "", get_settings().jwt_secret, algorithms=["HS256"])
@@ -161,7 +162,7 @@ async def login_totp(body: CodeIn, request: Request, response: Response, db: DB 
 
 
 @router.get("/totp/setup", dependencies=[Depends(require_admin)])
-async def totp_setup(db: DB = Depends(get_db)):
+async def totp_setup(db: DB = Depends(get_db, scope="function")):
     """The key to add to an authenticator app (kept until confirmed, so a reload shows the same one)."""
     row = await _totp_row(db)
     if row and row["confirmed_at"]:
@@ -177,7 +178,7 @@ BACKUP_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 
 
 @router.post("/totp/setup", dependencies=[Depends(require_admin)])
-async def totp_confirm(body: CodeIn, response: Response, db: DB = Depends(get_db)):
+async def totp_confirm(body: CodeIn, response: Response, db: DB = Depends(get_db, scope="function")):
     """Confirm with a code from the app. Returns 8 one-time backup codes, shown only now."""
     row = await db.fetch_one("select secret, confirmed_at from admin_totp where id = 1 for update")
     if not row:
@@ -205,7 +206,7 @@ async def logout(response: Response):
 
 
 @router.get("/me", dependencies=[Depends(require_admin)])
-async def me(db: DB = Depends(get_db)):
+async def me(db: DB = Depends(get_db, scope="function")):
     row = await _totp_row(db)
     enrolled = bool(row and row["confirmed_at"])
     backups = await db.fetch_val("select count(*) from admin_backup_codes where used_at is null") if enrolled else 0
@@ -213,7 +214,7 @@ async def me(db: DB = Depends(get_db)):
 
 
 @router.get("/overview", dependencies=[Depends(require_admin)])
-async def overview(db: DB = Depends(get_db)):
+async def overview(db: DB = Depends(get_db, scope="function")):
     money = await db.fetch_one("""
         select
           (select count(*) from users) as customers,
@@ -263,7 +264,7 @@ async def overview(db: DB = Depends(get_db)):
 
 @router.get("/orders", dependencies=[Depends(require_admin)])
 async def orders(status: str | None = None, q: str | None = None, limit: int = 50, offset: int = 0,
-                 db: DB = Depends(get_db)):
+                 db: DB = Depends(get_db, scope="function")):
     where, params = ["true"], {"lim": max(1, min(limit, 200)), "off": max(0, offset)}
     if status:
         order_filter(status, where, params)
@@ -282,7 +283,7 @@ async def orders(status: str | None = None, q: str | None = None, limit: int = 5
 
 
 @router.post("/orders/{order_id}/refund", dependencies=[Depends(require_admin)])
-async def refund_order(order_id: int, db: DB = Depends(get_db)):
+async def refund_order(order_id: int, db: DB = Depends(get_db, scope="function")):
     """For orders stuck in 'Under review' (the provider call failed mid-way): after checking the
     provider's dashboard that it wasn't placed, mark it failed and refund in full."""
     o = await db.fetch_one("select id, user_id, price_php, status from orders where id = :id for update", {"id": order_id})
@@ -296,7 +297,7 @@ async def refund_order(order_id: int, db: DB = Depends(get_db)):
 
 
 @router.get("/users", dependencies=[Depends(require_admin)])
-async def users(q: str | None = None, limit: int = 50, offset: int = 0, db: DB = Depends(get_db)):
+async def users(q: str | None = None, limit: int = 50, offset: int = 0, db: DB = Depends(get_db, scope="function")):
     params = {"lim": max(1, min(limit, 200)), "off": max(0, offset)}
     where = "true"
     if q:
@@ -323,7 +324,7 @@ class AdjustIn(BaseModel):
 
 
 @router.post("/users/{user_id}/adjust", dependencies=[Depends(require_admin)])
-async def adjust_balance(user_id: int, body: AdjustIn, db: DB = Depends(get_db)):
+async def adjust_balance(user_id: int, body: AdjustIn, db: DB = Depends(get_db, scope="function")):
     amt = round(body.amount_php, 2)
     if amt == 0 or abs(amt) > 100000:
         raise HTTPException(400, "Amount must be non-zero and at most ₱100,000")
@@ -339,7 +340,7 @@ async def adjust_balance(user_id: int, body: AdjustIn, db: DB = Depends(get_db))
 
 
 @router.get("/topups", dependencies=[Depends(require_admin)])
-async def topups(status: str | None = None, limit: int = 50, offset: int = 0, db: DB = Depends(get_db)):
+async def topups(status: str | None = None, limit: int = 50, offset: int = 0, db: DB = Depends(get_db, scope="function")):
     params = {"lim": max(1, min(limit, 200)), "off": max(0, offset)}
     where = "true"
     if status:
@@ -354,7 +355,7 @@ async def topups(status: str | None = None, limit: int = 50, offset: int = 0, db
 
 @router.get("/services", dependencies=[Depends(require_admin)])
 async def services(q: str | None = None, platform: str | None = None, hidden: bool = False, limit: int = 50,
-                   db: DB = Depends(get_db)):
+                   db: DB = Depends(get_db, scope="function")):
     where, params = ["s.active", "s.hidden = :hid"], {"hid": hidden, "lim": max(1, min(limit, 200))}
     if platform:
         where.append("s.platform = :pf")
@@ -379,7 +380,7 @@ class HiddenIn(BaseModel):
 
 
 @router.post("/services/{service_id}/hidden", dependencies=[Depends(require_admin)])
-async def set_hidden(service_id: int, body: HiddenIn, db: DB = Depends(get_db)):
+async def set_hidden(service_id: int, body: HiddenIn, db: DB = Depends(get_db, scope="function")):
     """Hide a service from customers (and block new orders). Separate from `active`, which the
     catalog import manages, so an import never brings a hidden service back."""
     row = await db.fetch_one("update services set hidden = :h where id = :id returning id",
@@ -396,7 +397,7 @@ CANCEL_OPEN = """o.cancel_manual and o.cancel_requested_at is not null and o.can
 
 
 @router.get("/cancellations", dependencies=[Depends(require_admin)])
-async def cancellations(view: str = "open", db: DB = Depends(get_db)):
+async def cancellations(view: str = "open", db: DB = Depends(get_db, scope="function")):
     """Cancel requests to take to the provider's support by hand. view=done: recent outcomes."""
     where = CANCEL_OPEN if view != "done" else """o.cancel_manual and o.cancel_requested_at is not null
         and not (""" + CANCEL_OPEN + ")"
@@ -416,7 +417,7 @@ class CancelActionIn(BaseModel):
 
 
 @router.post("/cancellations/{order_id}", dependencies=[Depends(require_admin)])
-async def cancellation_action(order_id: int, body: CancelActionIn, db: DB = Depends(get_db)):
+async def cancellation_action(order_id: int, body: CancelActionIn, db: DB = Depends(get_db, scope="function")):
     """contacted: you asked the provider's support · declined: it couldn't be canceled (the customer sees that)."""
     sets = {"contacted": "cancel_contacted_at = now()", "uncontacted": "cancel_contacted_at = null",
             "declined": "cancel_declined_at = now()"}[body.action]
@@ -428,12 +429,97 @@ async def cancellation_action(order_id: int, body: CancelActionIn, db: DB = Depe
     return {"ok": True}
 
 
+# ------------------------------------------------------------------ Messenger bot
+
+class BotSettingsIn(BaseModel):
+    model: str | None = Field(default=None, max_length=120)
+    notes: str | None = Field(default=None, max_length=bot_engine.NOTES_MAX)
+    enabled: bool | None = None
+
+
+@router.get("/bot", dependencies=[Depends(require_admin)])
+async def bot_overview(db: DB = Depends(get_db, scope="function")):
+    s = get_settings()
+    stats = await db.fetch_one("""
+        select (select count(*) from bot_chats where channel = 'messenger') as chats,
+               (select count(*) from bot_chats where channel = 'messenger' and muted_at is not null) as muted,
+               (select count(*) from bot_messages m join bot_chats c on c.id = m.chat_id
+                 where c.channel = 'messenger' and m.direction = 'out' and m.created_at > now() - interval '7 days') as replies_7d,
+               (select coalesce(sum(cost_usd), 0) from bot_messages where created_at > now() - interval '7 days') as cost_7d,
+               (select coalesce(sum(cost_usd), 0) from bot_messages) as cost_all,
+               (select count(*) from orders where source = 'chat') as orders
+    """)
+    chats = await db.fetch_all("""
+        select c.id, c.external_id, c.name, c.user_id, c.muted_at, c.mute_reason, c.last_message_at,
+               (select text from bot_messages m where m.chat_id = c.id order by id desc limit 1) as last_text,
+               (select count(*) from orders o where o.user_id = c.user_id) as orders
+          from bot_chats c where c.channel = 'messenger'
+         order by c.muted_at is null, c.last_message_at desc nulls last limit 50
+    """)
+    return {"settings": await bot_engine.read_settings(db),
+            "setup": {"openrouter": bool(s.openrouter_api_key), "meta_token": bool(s.meta_page_token),
+                      "meta_secret": bool(s.meta_app_secret), "verify_token": bool(s.meta_verify_token),
+                      "webhook_url": f"{s.base_url}/messenger/webhook"},
+            "stats": {**dict(stats), "cost_7d": float(stats["cost_7d"]), "cost_all": float(stats["cost_all"])},
+            "usd_to_php": fx.usd_to_php_raw(),
+            "chats": chats}
+
+
+@router.put("/bot", dependencies=[Depends(require_admin)])
+async def bot_save(body: BotSettingsIn, db: DB = Depends(get_db, scope="function")):
+    return await bot_engine.save_settings(db, model=body.model, notes=body.notes, enabled=body.enabled)
+
+
+class BotTestIn(BaseModel):
+    session: str = Field(min_length=4, max_length=40, pattern=r"^[a-zA-Z0-9_-]+$")
+    text: str = Field(min_length=1, max_length=800)
+
+
+@router.post("/bot/test", dependencies=[Depends(require_admin)])
+async def bot_test(body: BotTestIn, db: DB = Depends(get_db, scope="function")):
+    """The owner chats as a customer. Same engine and AI; no payment link and no order."""
+    if not get_settings().openrouter_api_key:
+        raise HTTPException(400, "Add OPENROUTER_API_KEY first")
+    chat = await bot_engine.get_chat(db, "playground", body.session)
+    out, debug = await bot_engine.respond(db, chat, [body.text], test=True)
+    await db.execute("insert into bot_messages (chat_id, direction, text) values (:c, 'in', :t)", {"c": chat["id"], "t": body.text})
+    await bot_engine.store_out(db, chat["id"], out, debug)
+    return {"replies": out, "debug": debug,
+            "draft": (chat.get("state") or {}).get("draft") or {}}
+
+
+@router.post("/bot/test/reset", dependencies=[Depends(require_admin)])
+async def bot_test_reset(body: dict, db: DB = Depends(get_db, scope="function")):
+    await db.execute("delete from bot_chats where channel = 'playground' and external_id = :x", {"x": str(body.get("session", ""))[:40]})
+    return {"ok": True}
+
+
+@router.get("/bot/chats/{chat_id}", dependencies=[Depends(require_admin)])
+async def bot_chat(chat_id: int, db: DB = Depends(get_db, scope="function")):
+    chat = await db.fetch_one("select id, name, external_id, muted_at, mute_reason, user_id from bot_chats where id = :c", {"c": chat_id})
+    if not chat:
+        raise HTTPException(404, "Chat not found")
+    msgs = await db.fetch_all("""select id, direction, text, created_at, cost_usd from bot_messages
+                                  where chat_id = :c order by id desc limit 100""", {"c": chat_id})
+    return {"chat": chat, "messages": list(reversed(msgs))}
+
+
+@router.post("/bot/chats/{chat_id}/unmute", dependencies=[Depends(require_admin)])
+async def bot_unmute(chat_id: int, db: DB = Depends(get_db, scope="function")):
+    row = await db.fetch_one("""update bot_chats set muted_at = null, mute_reason = null,
+                                       state = jsonb_set(coalesce(state, '{}'::jsonb), '{spam}', '0')
+                                 where id = :c returning id""", {"c": chat_id})
+    if not row:
+        raise HTTPException(404, "Chat not found")
+    return {"ok": True}
+
+
 class SendingIn(BaseModel):
     paused: bool
 
 
 @router.get("/sending", dependencies=[Depends(require_admin)])
-async def sending_state(db: DB = Depends(get_db)):
+async def sending_state(db: DB = Depends(get_db, scope="function")):
     return {**await order_queue.state(db), "draining": orders_router._drain_lock.locked()}
 
 
@@ -460,18 +546,18 @@ class AnnouncementIn(BaseModel):
 
 
 @router.get("/announcement", dependencies=[Depends(require_admin)])
-async def get_announcement(db: DB = Depends(get_db)):
+async def get_announcement(db: DB = Depends(get_db, scope="function")):
     return {**await announcement.read(db), "max_chars": announcement.MAX_CHARS}
 
 
 @router.put("/announcement", dependencies=[Depends(require_admin)])
-async def set_announcement(body: AnnouncementIn, db: DB = Depends(get_db)):
+async def set_announcement(body: AnnouncementIn, db: DB = Depends(get_db, scope="function")):
     """Empty text removes the bar."""
     return {**await announcement.save(db, body.text), "max_chars": announcement.MAX_CHARS}
 
 
 @router.get("/growth", dependencies=[Depends(require_admin)])
-async def growth(days: int = 14, db: DB = Depends(get_db)):
+async def growth(days: int = 14, db: DB = Depends(get_db, scope="function")):
     """Day by day (Philippine time): sign-ups and how many of them went on to order and to pay,
     plus the day's paid top-ups and orders. And the all-time funnel."""
     days = max(1, min(days, 90))
@@ -511,7 +597,7 @@ async def growth(days: int = 14, db: DB = Depends(get_db)):
 
 
 @router.get("/affiliates", dependencies=[Depends(require_admin)])
-async def affiliates(db: DB = Depends(get_db)):
+async def affiliates(db: DB = Depends(get_db, scope="function")):
     """Customers who brought in at least one sign-up with their referral link, and who they brought."""
     referrals = await db.fetch_all("""
         select u.id, u.email, u.created_at, u.referred_by,
@@ -544,7 +630,7 @@ async def affiliates(db: DB = Depends(get_db)):
 
 
 @router.get("/trials", dependencies=[Depends(require_admin)])
-async def trials(limit: int = 100, db: DB = Depends(get_db)):
+async def trials(limit: int = 100, db: DB = Depends(get_db, scope="function")):
     """Free trial orders, with the device and network they were claimed from. `shared_ip` counts
     other accounts whose trial came from the same IP (a sign of one person with several accounts)."""
     return await db.fetch_all("""
@@ -559,7 +645,7 @@ async def trials(limit: int = 100, db: DB = Depends(get_db)):
 
 
 @router.get("/ledger", dependencies=[Depends(require_admin)])
-async def ledger(reason: str | None = None, q: str | None = None, limit: int = 100, db: DB = Depends(get_db)):
+async def ledger(reason: str | None = None, q: str | None = None, limit: int = 100, db: DB = Depends(get_db, scope="function")):
     """Every movement of customer money, newest first."""
     where, params = ["true"], {"lim": max(1, min(limit, 200))}
     if reason:
@@ -578,7 +664,7 @@ async def ledger(reason: str | None = None, q: str | None = None, limit: int = 1
 
 
 @router.get("/errors", dependencies=[Depends(require_admin)])
-async def errors(db: DB = Depends(get_db)):
+async def errors(db: DB = Depends(get_db, scope="function")):
     """Problems customers' browsers reported, newest first."""
     return await db.fetch_all("""
         select id, created_at, page, message, user_agent from client_errors

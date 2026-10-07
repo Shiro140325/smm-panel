@@ -58,7 +58,7 @@ def new_ref_code() -> str:
 
 
 @router.post("/register")
-async def register(body: RegisterIn, request: Request, response: Response, db: DB = Depends(get_db)):
+async def register(body: RegisterIn, request: Request, response: Response, db: DB = Depends(get_db, scope="function")):
     signups_ip.hit(client_ip(request))
     referrer = None
     if body.ref:
@@ -76,7 +76,7 @@ async def register(body: RegisterIn, request: Request, response: Response, db: D
 
 
 @router.post("/login")
-async def login(body: Credentials, request: Request, response: Response, db: DB = Depends(get_db)):
+async def login(body: Credentials, request: Request, response: Response, db: DB = Depends(get_db, scope="function")):
     ip, email = client_ip(request), "e:" + body.email.lower()
     login_fails_ip.check(ip)
     login_fails_email.check(email)
@@ -133,7 +133,7 @@ def _pending_user(request: Request) -> int:
 
 
 @router.post("/login/resend")
-async def login_resend(request: Request, db: DB = Depends(get_db)):
+async def login_resend(request: Request, db: DB = Depends(get_db, scope="function")):
     uid = _pending_user(request)
     email = await db.fetch_val("select email from users where id = :u", {"u": uid})
     await verify.issue_code(db, uid, "login", email)
@@ -161,7 +161,7 @@ async def logout(response: Response):
 
 
 @router.get("/me")
-async def me(request: Request, user: dict = Depends(current_user), db: DB = Depends(get_db)):
+async def me(request: Request, user: dict = Depends(current_user), db: DB = Depends(get_db, scope="function")):
     verified = await db.fetch_val("select email_verified_at is not null from users where id = :u", {"u": user["id"]})
     return {**user, "balance_php": await balance_of(db, user["id"]), "tier": await current_tier(db, user["id"]),
             "email_verified": bool(verified), "verify_required": verify.required(),

@@ -27,7 +27,7 @@ def _mask(email: str) -> str:
 
 
 @router.get("/affiliate")
-async def affiliate(user: dict = Depends(current_user), db: DB = Depends(get_db)):
+async def affiliate(user: dict = Depends(current_user), db: DB = Depends(get_db, scope="function")):
     code = await db.fetch_val("select ref_code from users where id = :u", {"u": user["id"]})
     while not code:   # accounts made before the referral program get a code on first visit
         code = await db.fetch_val("""
@@ -63,13 +63,13 @@ async def affiliate(user: dict = Depends(current_user), db: DB = Depends(get_db)
 
 
 @router.get("/api-key")
-async def api_key_status(user: dict = Depends(current_user), db: DB = Depends(get_db)):
+async def api_key_status(user: dict = Depends(current_user), db: DB = Depends(get_db, scope="function")):
     has = await db.fetch_val("select api_key_hash is not null from users where id = :u", {"u": user["id"]})
     return {"has_key": bool(has), "url": get_settings().base_url + "/api/v2"}
 
 
 @router.post("/api-key")
-async def new_api_key(user: dict = Depends(current_user), db: DB = Depends(get_db)):
+async def new_api_key(user: dict = Depends(current_user), db: DB = Depends(get_db, scope="function")):
     """Create (or replace) the API key. It is shown once; only its hash is stored."""
     key = secrets.token_hex(16)
     await db.execute("update users set api_key_hash = :h where id = :u", {"h": hash_api_key(key), "u": user["id"]})
@@ -77,13 +77,13 @@ async def new_api_key(user: dict = Depends(current_user), db: DB = Depends(get_d
 
 
 @router.delete("/api-key")
-async def revoke_api_key(user: dict = Depends(current_user), db: DB = Depends(get_db)):
+async def revoke_api_key(user: dict = Depends(current_user), db: DB = Depends(get_db, scope="function")):
     await db.execute("update users set api_key_hash = null where id = :u", {"u": user["id"]})
     return {"ok": True}
 
 
 @router.post("/tier-seen")
-async def tier_seen(user: dict = Depends(current_user), db: DB = Depends(get_db)):
+async def tier_seen(user: dict = Depends(current_user), db: DB = Depends(get_db, scope="function")):
     """The customer closed their tier's introduction card: don't show it again (on any device)."""
     tier = await current_tier(db, user["id"])
     await db.execute("update users set tier_seen = :t where id = :u", {"t": tier["name"], "u": user["id"]})
@@ -128,7 +128,7 @@ async def _check_password(db, user_id: int, password: str, request: Request) -> 
 
 
 @router.get("/settings")
-async def settings(user: dict = Depends(current_user), db: DB = Depends(get_db)):
+async def settings(user: dict = Depends(current_user), db: DB = Depends(get_db, scope="function")):
     row = await db.fetch_one("select email, created_at, email_verified_at, password_changed_at from users where id = :u",
                              {"u": user["id"]})
     pending = await db.fetch_val("select new_email from account_codes where user_id = :u and purpose = 'email_new' "

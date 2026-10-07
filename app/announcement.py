@@ -32,7 +32,7 @@ async def save(db: DB, text: str) -> dict:
 
 
 @router.get("/announcement")
-async def get_announcement(user: dict = Depends(current_user), db: DB = Depends(get_db)):
+async def get_announcement(user: dict = Depends(current_user), db: DB = Depends(get_db, scope="function")):
     """Logged-in customers only. Every dashboard load asks for this, so it's cached for 30 seconds (cleared on save)."""
     global _cache
     if _cache is None or time.monotonic() - _cache[0] >= 30:

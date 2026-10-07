@@ -15,7 +15,7 @@ class ErrorIn(BaseModel):
 
 
 @router.post("/client-error")
-async def report(body: ErrorIn, request: Request, db: DB = Depends(get_db)):
+async def report(body: ErrorIn, request: Request, db: DB = Depends(get_db, scope="function")):
     _limit.hit(client_ip(request))
     await db.execute("insert into client_errors (page, message, user_agent) values (:p, :m, :ua)",
                      {"p": body.page, "m": body.message, "ua": request.headers.get("user-agent", "")[:400]})

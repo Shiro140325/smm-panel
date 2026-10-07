@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Payment — SMM Shiro</title>
+<meta name="theme-color" content="#F4F4F4">
+<script>/* apply saved theme before first paint */(function(){try{var t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap">
+<link rel="icon" href="/favicon.ico?v=4" sizes="any">
+<link rel="icon" type="image/png" sizes="64x64" href="/assets/img/favicon.png?v=4">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=4">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<main class="auth-page">
+  <div class="card auth-card" style="text-align:center;gap:14px">
+    <a class="brand brand-lg" href="/" aria-label="SMM Shiro home" style="align-self:center"><img class="logo-ink" src="/assets/img/logo.png" alt="SMM Shiro" width="132" height="44"></a>
+    <h1 id="title" style="margin:0;font-size:24px">Payment received</h1>
+    <p id="text" class="muted" style="margin:0;line-height:1.5">Thank you! Go back to Messenger: we'll confirm your order there in a moment.</p>
+    <a class="btn btn-primary btn-lg btn-block" href="https://m.me/" id="back">Back to Messenger</a>
+  </div>
+</main>
+<script>
+  if (new URLSearchParams(location.search).get("canceled")) {
+    document.getElementById("title").textContent = "Payment canceled";
+    document.getElementById("text").textContent = "Nothing was charged. Go back to Messenger if you'd like a new payment link.";
+  }
+</script>
+</body>
+</html>

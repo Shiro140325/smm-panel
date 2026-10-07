@@ -156,7 +156,7 @@ function render() {
     if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   });
   ({ overview: renderOverview, orders: renderOrders, customers: renderCustomers, topups: renderTopups, services: renderServices,
-     cancels: renderCancels, growth: renderGrowth, affiliates: renderAffiliates, trials: renderTrials, ledger: renderLedger, errors: renderErrors,
+     cancels: renderCancels, bot: renderBot, growth: renderGrowth, affiliates: renderAffiliates, trials: renderTrials, ledger: renderLedger, errors: renderErrors,
      more: renderMore }[name]
     || renderOverview)();
   window.scrollTo(0, 0);
@@ -282,6 +282,159 @@ function renderCancels() {
     load();
   }));
   load();
+}
+
+/* ------------------------------------------------------------ Messenger bot */
+
+let botSession = null;
+function botSessionId() {
+  if (!botSession) {
+    try { botSession = sessionStorage.getItem("botSession"); } catch { /* private mode */ }
+    if (!botSession) {
+      botSession = "t" + Math.random().toString(36).slice(2, 12);
+      try { sessionStorage.setItem("botSession", botSession); } catch { /* private mode */ }
+    }
+  }
+  return botSession;
+}
+
+async function renderBot() {
+  view.innerHTML = `<div class="page-head"><h1>Messenger bot</h1></div><div id="bot"><div class="card empty">Loading…</div></div>`;
+  let d;
+  try { d = await call("/admin/api/bot"); } catch (e) { $("bot").innerHTML = `<div class="card empty">${esc(e.message)}</div>`; return; }
+  const s = d.settings, su = d.setup, st = d.stats, rate = d.usd_to_php;
+  const php = (usd) => `₱${(usd * rate).toFixed(usd * rate < 1 ? 3 : 2)}`;
+  const ready = su.openrouter && su.meta_token && su.meta_secret && su.verify_token;
+  const tick = (ok, label, hint) => `<li class="${ok ? "ok" : ""}">${ok ? icons.check(16) : "○"} <span>${label}${ok ? "" : ` <span class="muted">· ${hint}</span>`}</span></li>`;
+  $("bot").innerHTML = `
+    <div class="bot-grid">
+      <div class="bot-col">
+        <section class="card panel bot-card">
+          <h3>Test chat</h3>
+          <p class="hint" style="margin:0">Chat as a customer to see exactly what the bot replies. Test mode: no payment link, no order.</p>
+          <div class="bot-log" id="bot-log"><div class="muted bot-empty">Say something like “pa 1k likes sa tiktok ko”.</div></div>
+          <form class="bot-send" id="bot-form"><input class="input" id="bot-in" autocomplete="off" maxlength="800" placeholder="Type as a customer…">
+            <button class="btn btn-primary" type="submit" id="bot-go">Send</button></form>
+          <div class="bot-row"><span class="hint" id="bot-draft"></span><button type="button" class="btn btn-ghost btn-sm" id="bot-reset">New test chat</button></div>
+        </section>
+        <section class="card panel bot-card">
+          <h3>Conversations <span class="muted" style="font-weight:500">· ${num(st.chats)} on Messenger${st.muted ? `, ${num(st.muted)} silenced` : ""}</span></h3>
+          <div id="bot-chats">${d.chats.length ? d.chats.map((c) => `
+            <div class="bot-chat" data-chat="${c.id}">
+              <div class="grow"><strong>${esc(c.name || "Messenger user")}</strong> ${c.muted_at ? `<span class="badge badge-failed">Silenced</span>` : ""}
+                <div class="hint" style="margin:2px 0 0">${c.last_message_at ? fmtDate(c.last_message_at) : ""} · ${num(c.orders)} order${c.orders === 1 ? "" : "s"} · ${esc((c.last_text || "").slice(0, 70))}</div></div>
+              ${c.muted_at ? `<button type="button" class="btn btn-secondary btn-sm" data-unmute="${c.id}">Unmute</button>` : ""}
+              <button type="button" class="btn btn-ghost btn-sm" data-open="${c.id}">View</button>
+            </div><div class="bot-transcript hidden" id="tr-${c.id}"></div>`).join("") : `<p class="hint" style="margin:0">No Messenger chats yet.</p>`}</div>
+        </section>
+      </div>
+      <div class="bot-col">
+        <section class="card panel bot-card">
+          <h3>Setup</h3>
+          <ul class="bot-setup">
+            ${tick(su.openrouter, "OpenRouter key", "add OPENROUTER_API_KEY in Render")}
+            ${tick(su.meta_token, "Facebook Page token", "META_PAGE_TOKEN")}
+            ${tick(su.meta_secret, "Meta app secret", "META_APP_SECRET")}
+            ${tick(su.verify_token, "Webhook verify token", "META_VERIFY_TOKEN")}
+          </ul>
+          <div class="field"><span class="label">Webhook callback URL (for the Meta app)</span>
+            <div class="setup-key"><code>${esc(su.webhook_url)}</code></div></div>
+          <label class="check"><input type="checkbox" id="bot-on" ${s.enabled ? "checked" : ""} ${ready ? "" : "disabled"}>
+            <span><strong>Reply on Messenger</strong><br><span class="muted">${ready ? "When off, messages are saved but not answered." : "Finish the setup above first."}</span></span></label>
+        </section>
+        <section class="card panel bot-card">
+          <h3>How it talks</h3>
+          <div class="field"><label for="bot-model">AI model (OpenRouter)</label>
+            <input class="input" id="bot-model" value="${esc(s.model)}" maxlength="120"></div>
+          <div class="field"><label for="bot-notes">Your notes for the bot</label>
+            <textarea class="textarea" id="bot-notes" rows="7" maxlength="1500" placeholder="Facts it can use to answer questions, e.g.&#10;- Orders usually start within 1 hour.&#10;- Undelivered amounts become credit.&#10;- We don't need passwords, only the public link.&#10;- Be friendly, use Taglish if the customer does.">${esc(s.notes)}</textarea>
+            <span class="hint" id="bot-notes-count"></span></div>
+          <button type="button" class="btn btn-primary" id="bot-save">Save</button>
+          <p class="hint" style="margin:0">Prices, services and payment always come from your catalog, never from the AI. Notes are sent with every reply, so keep them short.</p>
+        </section>
+        <section class="card panel bot-card">
+          <h3>Usage</h3>
+          <div class="bot-stats">
+            <div><span class="k">Replies (7 days)</span><span class="v">${num(st.replies_7d)}</span></div>
+            <div><span class="k">AI cost (7 days)</span><span class="v">${php(st.cost_7d)}</span></div>
+            <div><span class="k">AI cost (all time)</span><span class="v">${php(st.cost_all)}</span></div>
+            <div><span class="k">Orders from chat</span><span class="v">${num(st.orders)}</span></div>
+          </div>
+        </section>
+      </div>
+    </div>`;
+
+  /* settings */
+  const paintCount = () => { $("bot-notes-count").textContent = `${$("bot-notes").value.length} / 1500 characters`; };
+  $("bot-notes").addEventListener("input", paintCount); paintCount();
+  $("bot-save").onclick = async () => {
+    try { await call("/admin/api/bot", { method: "PUT", body: { model: $("bot-model").value.trim(), notes: $("bot-notes").value } }); toast("Saved"); }
+    catch (e) { toast(e.message, { bad: true }); }
+  };
+  $("bot-on").onchange = async (ev) => {
+    try { await call("/admin/api/bot", { method: "PUT", body: { enabled: ev.target.checked } }); toast(ev.target.checked ? "The bot now replies on Messenger" : "Bot replies are off"); }
+    catch (e) { ev.target.checked = !ev.target.checked; toast(e.message, { bad: true }); }
+  };
+
+  /* test chat */
+  const log = $("bot-log");
+  const bubble = (who, text, meta = "") => {
+    log.querySelector(".bot-empty")?.remove();
+    const el = document.createElement("div");
+    el.className = `bot-msg ${who}`;
+    el.innerHTML = `<div class="bubble">${esc(text).replace(/\n/g, "<br>")}</div>${meta ? `<div class="bot-meta">${meta}</div>` : ""}`;
+    log.appendChild(el);
+    log.scrollTop = log.scrollHeight;
+  };
+  const paintDraft = (dr) => {
+    const parts = [dr.platform, dr.category, dr.quantity && `×${num(dr.quantity)}`, dr.link && "link ✓", dr.step].filter(Boolean);
+    $("bot-draft").textContent = parts.length ? `Draft: ${parts.join(" · ")}` : "";
+  };
+  $("bot-form").onsubmit = async (ev) => {
+    ev.preventDefault();
+    const text = $("bot-in").value.trim();
+    if (!text) return;
+    $("bot-in").value = "";
+    bubble("in", text);
+    $("bot-go").disabled = true;
+    try {
+      const r = await call("/admin/api/bot/test", { method: "POST", body: { session: botSessionId(), text } });
+      const a = r.debug.ai || {};
+      const understood = a.intent ? `understood: ${esc(a.intent)}${a.platform ? ` · ${esc(a.platform)}` : ""}${a.category ? ` ${esc(a.category)}` : ""}${a.quantity ? ` ×${num(a.quantity)}` : ""}` : "";
+      const cost = r.debug.tokens_in != null ? ` · ${num((r.debug.tokens_in || 0) + (r.debug.tokens_out || 0))} tokens${r.debug.cost_usd != null ? ` · ${php(r.debug.cost_usd)}` : ""}` : "";
+      if (!r.replies.length) bubble("out", "(no reply: the bot silenced this chat as spam)", understood + cost);
+      r.replies.forEach((m, i) => bubble("out", m.text + (m.button ? `\n[${m.button.title}]` : ""), i === 0 ? understood + cost : ""));
+      if (r.debug.error) bubble("out", `AI error: ${r.debug.error}`);
+      paintDraft(r.draft || {});
+    } catch (e) { bubble("out", e.message); }
+    $("bot-go").disabled = false;
+    $("bot-in").focus();
+  };
+  $("bot-reset").onclick = async () => {
+    try { await call("/admin/api/bot/test/reset", { method: "POST", body: { session: botSessionId() } }); } catch { /* ignore */ }
+    botSession = null;
+    try { sessionStorage.removeItem("botSession"); } catch { /* private mode */ }
+    log.innerHTML = `<div class="muted bot-empty">New test chat.</div>`;
+    paintDraft({});
+  };
+
+  /* conversations */
+  view.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", async () => {
+    const box = $(`tr-${b.dataset.open}`);
+    if (!box.classList.contains("hidden")) { box.classList.add("hidden"); b.textContent = "View"; return; }
+    try {
+      const r = await call(`/admin/api/bot/chats/${b.dataset.open}`);
+      box.innerHTML = r.messages.map((m) => `<div class="bot-msg ${m.direction}"><div class="bubble">${esc(m.text).replace(/\n/g, "<br>")}</div>
+        <div class="bot-meta">${fmtDate(m.created_at)}</div></div>`).join("") || `<p class="hint">No messages.</p>`;
+      box.classList.remove("hidden");
+      b.textContent = "Hide";
+    } catch (e) { toast(e.message, { bad: true }); }
+  }));
+  view.querySelectorAll("[data-unmute]").forEach((b) => b.addEventListener("click", async () => {
+    b.disabled = true;
+    try { await call(`/admin/api/bot/chats/${b.dataset.unmute}/unmute`, { method: "POST" }); toast("Unmuted: the bot will reply again"); renderBot(); }
+    catch (e) { toast(e.message, { bad: true }); b.disabled = false; }
+  }));
 }
 
 /* pause / resume sending orders to SMMGen */
@@ -533,6 +686,7 @@ function renderServices() {
 
 const MORE = [
   ["cancels", "warn", "Cancellations", "Cancel requests to take to SMMGen support"],
+  ["bot", "chat", "Messenger bot", "Test the bot, its notes, and chats"],
   ["services", "grid", "Services", "Hide or show services"],
   ["growth", "monitor", "Growth", "Sign-ups, orders and payments by day"],
   ["affiliates", "gift", "Affiliates", "Customers who brought in sign-ups"],

@@ -123,12 +123,12 @@ async def warm_cache():
 
 @router.get("")
 async def list_services(request: Request, platform: str | None = None, featured: bool = False,
-                        db: DB = Depends(get_db)):
+                        db: DB = Depends(get_db, scope="function")):
     return await _cached(request, (platform, featured), db)
 
 
 @router.get("/top")
-async def top_services(request: Request, db: DB = Depends(get_db)):
+async def top_services(request: Request, db: DB = Depends(get_db, scope="function")):
     """The home page price table: per platform, the 5 cheapest of each category, followers first (max 65)."""
     return await _cached(request, TOP_KEY, db)
 
@@ -154,7 +154,7 @@ TIMING_TTL = 300
 
 
 @router.get("/timing")
-async def service_timing(db: DB = Depends(get_db)):
+async def service_timing(db: DB = Depends(get_db, scope="function")):
     """Per service, from its latest completed orders (all customers): how many we have (up to 15),
     their average completion time once there are 15, and how long the most recent one took.
     Completion time = order placed → provider reported it completed."""
@@ -180,7 +180,7 @@ async def service_timing(db: DB = Depends(get_db)):
 
 
 @router.get("/count")
-async def count_services(db: DB = Depends(get_db)):
+async def count_services(db: DB = Depends(get_db, scope="function")):
     """How many services customers can order (the landing page links to the full list with this)."""
     hit = _cache.get(("count",))
     if hit and time.monotonic() - hit[0] < _CACHE_TTL:

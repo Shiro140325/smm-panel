@@ -18,6 +18,7 @@ from app import announcement, fx
 from app.config import get_settings
 from app.site import ASSET_VERSION, not_found_page
 from app.routers import account, admin, api_v2, auth, client_errors, orders, pages, services, topups, webhooks
+from app.bot import messenger
 from app.workers.sync import run_sync_once
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -32,6 +33,10 @@ async def sync_loop(interval: int):
         except Exception:
             log.exception("sync run failed")
         orders.kick_queue()   # resume sending a backlog after a restart (no-op while paused or empty)
+        try:
+            await messenger.catch_up()   # answer Messenger chats a restart left waiting
+        except Exception:
+            log.exception("messenger catch-up failed")
         await asyncio.sleep(interval)
 
 
@@ -55,7 +60,7 @@ app.add_middleware(
 )
 
 for r in (auth.router, services.router, orders.router, topups.router, webhooks.router, admin.router,
-          account.router, api_v2.router, announcement.router, client_errors.router, pages.router):
+          account.router, api_v2.router, announcement.router, client_errors.router, messenger.router, pages.router):
     app.include_router(r)
 
 

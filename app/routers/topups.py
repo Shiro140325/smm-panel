@@ -6,7 +6,7 @@ from pydantic import BaseModel
 
 from app.config import get_settings
 from app.db import transaction
-from app.payments import PAYMONGO_API, TOPUP_TTL_MINUTES, close_topup, expire_stale_topups, reconcile_topup
+from app.payments import TOPUP_TTL_MINUTES, close_topup, create_checkout, expire_stale_topups, reconcile_topup
 from app.security import current_user
 
 router = APIRouter(prefix="/topups", tags=["topups"])
@@ -24,35 +24,14 @@ async def create_topup(body: TopupIn, user: dict = Depends(current_user)):
     if not s.paymongo_secret_key:
         raise HTTPException(503, "Payments are not configured")
 
-    topup_id = str(uuid.uuid4())
-    async with transaction() as db:
-        await db.execute("""
-            insert into topups (id, user_id, amount_php, method) values (:id, :u, :a, 'paymongo')
-        """, {"id": topup_id, "u": user["id"], "a": body.amount_php})
-        # method is updated to the one actually used (gcash, paymaya, ...) when the webhook credits it
-
-    payload = {"data": {"attributes": {
-        "line_items": [{"name": "Wallet top-up", "amount": body.amount_php * 100,
-                        "currency": "PHP", "quantity": 1}],
-        # customer picks on PayMongo's checkout; e-wallets only by default (cards invite chargebacks)
-        "payment_method_types": s.paymongo_method_list,
-        "reference_number": topup_id,
-        "description": f"Wallet top-up ₱{body.amount_php:,}",
-        "metadata": {"topup_id": topup_id},
-        "success_url": f"{s.frontend_origin}/dashboard/#funds?status=success&topup={topup_id}",
-        "cancel_url": f"{s.frontend_origin}/dashboard/#funds?status=cancel",
-    }}}
-    async with httpx.AsyncClient(auth=(s.paymongo_secret_key, ""), timeout=30) as c:
-        r = await c.post(f"{PAYMONGO_API}/checkout_sessions", json=payload)
-    if r.status_code >= 400:
+    try:
+        topup_id, url = await create_checkout(
+            user["id"], body.amount_php, "Wallet top-up",
+            success_url=f"{s.frontend_origin}/dashboard/#funds?status=success&topup={{topup_id}}",
+            cancel_url=f"{s.frontend_origin}/dashboard/#funds?status=cancel")
+    except RuntimeError:
         raise HTTPException(502, "Couldn't start checkout. Try again.")
-    sess = r.json()["data"]
-
-    async with transaction() as db:
-        await db.execute("""
-            update topups set checkout_id = :cid, checkout_url = :url where id = :id
-        """, {"cid": sess["id"], "url": sess["attributes"]["checkout_url"], "id": topup_id})
-    return {"topup_id": topup_id, "checkout_url": sess["attributes"]["checkout_url"]}
+    return {"topup_id": topup_id, "checkout_url": url}
 
 
 @router.post("/{topup_id}/check")

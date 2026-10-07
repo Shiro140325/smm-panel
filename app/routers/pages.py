@@ -34,7 +34,7 @@ async def _redirect(request: Request):
     return RedirectResponse(request.url.path + "/", status_code=301)
 
 
-async def _public_page(request: Request, db: DB = Depends(get_db)):
+async def _public_page(request: Request, db: DB = Depends(get_db, scope="function")):
     slug = request.url.path.strip("/")
     if slug in LEGAL:
         title, desc, body = LEGAL[slug]

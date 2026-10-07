@@ -80,7 +80,50 @@ async def credit_topup(topup_id: str, paid_php: int, source: str | None) -> bool
             await _topup_extras(db, row["user_id"], paid_php, topup_id)
     if row:
         log.info("topup %s credited ₱%s (%s)", topup_id, paid_php, source)
+        try:   # a Messenger order waiting for this payment: place it now
+            from app.bot.engine import after_payment
+            await after_payment(topup_id)
+        except Exception:
+            log.exception("bot order after payment %s failed", topup_id)
     return bool(row)
+
+
+async def create_checkout(user_id: int, amount_php: int, description: str, success_url: str | None = None,
+                          cancel_url: str | None = None, bot_chat_id: int | None = None,
+                          bot_order: dict | None = None) -> tuple[str, str]:
+    """Record a pending top-up and open a PayMongo checkout for it. Returns (topup_id, checkout_url).
+    "{topup_id}" in success_url is filled in. bot_order: a Messenger order to place once this is credited."""
+    import json
+    s = get_settings()
+    if not s.paymongo_secret_key:
+        raise RuntimeError("Payments are not configured")
+    topup_id = str(uuid.uuid4())
+    async with transaction() as db:
+        await db.execute("""
+            insert into topups (id, user_id, amount_php, method, bot_chat_id, bot_order)
+            values (:id, :u, :a, 'paymongo', :bc, :bo)
+        """, {"id": topup_id, "u": user_id, "a": amount_php, "bc": bot_chat_id,
+              "bo": json.dumps(bot_order) if bot_order else None})
+        # method is updated to the one actually used (gcash, paymaya, ...) when the webhook credits it
+    payload = {"data": {"attributes": {
+        "line_items": [{"name": description, "amount": amount_php * 100, "currency": "PHP", "quantity": 1}],
+        # customer picks on PayMongo's checkout; e-wallets only by default (cards invite chargebacks)
+        "payment_method_types": s.paymongo_method_list,
+        "reference_number": topup_id,
+        "description": f"{description} ₱{amount_php:,}",
+        "metadata": {"topup_id": topup_id},
+        "success_url": (success_url or f"{s.frontend_origin}/paid/").replace("{topup_id}", topup_id),
+        "cancel_url": cancel_url or f"{s.frontend_origin}/paid/?canceled=1",
+    }}}
+    async with httpx.AsyncClient(auth=(s.paymongo_secret_key, ""), timeout=30) as c:
+        r = await c.post(f"{PAYMONGO_API}/checkout_sessions", json=payload)
+    if r.status_code >= 400:
+        raise RuntimeError(f"checkout failed: {r.status_code} {r.text[:200]}")
+    sess = r.json()["data"]
+    async with transaction() as db:
+        await db.execute("update topups set checkout_id = :cid, checkout_url = :url where id = :id",
+                         {"cid": sess["id"], "url": sess["attributes"]["checkout_url"], "id": topup_id})
+    return topup_id, sess["attributes"]["checkout_url"]
 
 
 async def fetch_checkout(checkout_id: str) -> dict | None:

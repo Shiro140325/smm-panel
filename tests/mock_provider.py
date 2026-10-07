@@ -135,3 +135,45 @@ async def resend_emails(body: dict):
 @app.get("/_emails")
 async def last_emails(to: str):
     return [e for e in EMAILS if to in e.get("to", [])]
+
+
+# --- fake OpenRouter: answers come from a script the test sets; requests are recorded
+LLM = {"script": [], "calls": []}
+
+
+@app.post("/_llm_script")
+async def llm_script(body: dict):
+    LLM["script"] = list(body.get("answers", []))
+    LLM["calls"] = []
+    return {"ok": True}
+
+
+@app.get("/_llm_calls")
+async def llm_calls():
+    return LLM["calls"]
+
+
+@app.post("/chat/completions")
+async def chat_completions(body: dict):
+    LLM["calls"].append(body)
+    answer = LLM["script"].pop(0) if LLM["script"] else {"intent": "greeting", "lang": "en", "reply": "Hi!"}
+    import json as _json
+    return {"choices": [{"message": {"content": _json.dumps(answer)}}],
+            "usage": {"prompt_tokens": 400, "completion_tokens": 40, "cost": 0.0001}}
+
+
+# --- fake Messenger Send API
+SENT: list[dict] = []
+
+
+@app.post("/me/messages")
+async def me_messages(body: dict, access_token: str = ""):
+    if access_token != "pt":
+        return JSONResponse({"error": {"message": "bad token"}}, status_code=400)
+    SENT.append(body)
+    return {"recipient_id": (body.get("recipient") or {}).get("id"), "message_id": f"m_{len(SENT)}"}
+
+
+@app.get("/_sent")
+async def sent(psid: str):
+    return [m for m in SENT if (m.get("recipient") or {}).get("id") == psid and "message" in m]

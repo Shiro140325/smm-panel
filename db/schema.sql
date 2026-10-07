@@ -210,3 +210,35 @@ alter table orders add column if not exists cancel_manual boolean not null defau
 alter table orders add column if not exists cancel_contacted_at timestamptz;   -- owner asked the provider's support
 alter table orders add column if not exists cancel_declined_at timestamptz;    -- couldn't be canceled
 create index if not exists orders_cancel_pending on orders (cancel_requested_at) where cancel_manual and cancel_declined_at is null;
+
+-- Messenger bot: one row per conversation (channel 'messenger' = a Facebook user, 'playground' = owner tests)
+create table if not exists bot_chats (
+  id              bigserial primary key,
+  channel         text not null,
+  external_id     text not null,                 -- Messenger PSID, or the playground session
+  user_id         bigint references users(id),   -- the customer's account (created on first message)
+  name            text,
+  state           jsonb not null default '{}',   -- draft order, step, language, spam strikes
+  muted_at        timestamptz,                   -- the bot stopped replying (spam)
+  mute_reason     text,
+  created_at      timestamptz not null default now(),
+  last_message_at timestamptz,
+  unique (channel, external_id)
+);
+create table if not exists bot_messages (
+  id         bigserial primary key,
+  chat_id    bigint not null references bot_chats(id) on delete cascade,
+  direction  text not null,                -- in | out
+  text       text not null,
+  processed  boolean not null default true,   -- incoming: answered yet?
+  tokens_in  int,
+  tokens_out int,
+  cost_usd   numeric(12,6),
+  debug      jsonb,                         -- what the AI understood (shown in the control panel)
+  created_at timestamptz not null default now()
+);
+create index if not exists bot_messages_chat on bot_messages (chat_id, id);
+create index if not exists bot_messages_unprocessed on bot_messages (chat_id) where not processed;
+alter table topups add column if not exists bot_chat_id bigint references bot_chats(id);
+alter table topups add column if not exists bot_order jsonb;      -- chat order to place once this payment lands
+alter table users add column if not exists channel text;          -- 'messenger' for chat-only customers

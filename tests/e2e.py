@@ -627,6 +627,129 @@ async def main():
     r = await httpx.AsyncClient(base_url=API).get("/announcement")
     check("announcement: only for logged-in customers", r.status_code == 401, r.status_code)
 
+    # --- Messenger bot
+    bm = httpx.AsyncClient(base_url=MOCK)
+    def fb_event(psid, *texts):
+        return {"object": "page", "entry": [{"id": "page", "messaging": [
+            {"sender": {"id": psid}, "recipient": {"id": "page"}, "message": {"mid": f"m{i}", "text": t}} for i, t in enumerate(texts)]}]}
+    def fb_signed(body, secret="appsecret"):
+        raw = json.dumps(body).encode()
+        return raw, {"x-hub-signature-256": "sha256=" + hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest(),
+                     "content-type": "application/json"}
+    async def fb_send(psid, *texts):
+        raw, hdr = fb_signed(fb_event(psid, *texts))
+        return await httpx.AsyncClient(base_url=API).post("/messenger/webhook", content=raw, headers=hdr)
+    async def fb_wait(psid, n, timeout=8.0):
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < timeout:
+            got = (await bm.get("/_sent", params={"psid": psid})).json()
+            if len(got) >= n:
+                return got
+            await asyncio.sleep(0.2)
+        return (await bm.get("/_sent", params={"psid": psid})).json()
+    def fb_text(m):
+        msg = m["message"]
+        return msg.get("text") or msg["attachment"]["payload"]["text"]
+
+    r = await httpx.AsyncClient(base_url=API).get("/messenger/webhook", params={"hub.mode": "subscribe", "hub.verify_token": "vt", "hub.challenge": "c123"})
+    check("bot: Meta webhook check", r.status_code == 200 and r.text == "c123", r.text)
+    r = await httpx.AsyncClient(base_url=API).get("/messenger/webhook", params={"hub.mode": "subscribe", "hub.verify_token": "nope", "hub.challenge": "x"})
+    check("bot: wrong verify token refused", r.status_code == 403, r.text)
+    raw, hdr = fb_signed(fb_event("p1", "hi"), secret="wrong")
+    r = await httpx.AsyncClient(base_url=API).post("/messenger/webhook", content=raw, headers=hdr)
+    check("bot: unsigned webhook refused", r.status_code == 403, r.text)
+
+    st_b = (await ca.get("/admin/api/bot")).json()
+    check("bot: control panel shows setup and settings", st_b["setup"]["openrouter"] and st_b["setup"]["meta_token"]
+          and st_b["settings"]["model"] == "meta-llama/llama-3.3-70b-instruct" and st_b["settings"]["enabled"] is False, st_b)
+    await bm.post("/_llm_script", json={"answers": []})
+    r = await fb_send("p0", "hello?")
+    await asyncio.sleep(1.5)
+    check("bot: switched off → messages saved, no AI, no reply", r.status_code == 200 and (await bm.get("/_llm_calls")).json() == []
+          and (await bm.get("/_sent", params={"psid": "p0"})).json() == [], r.text)
+    r = await ca.put("/admin/api/bot", json={"enabled": True, "notes": "Orders start within 1 hour."})
+    check("bot: switched on, notes saved", r.status_code == 200 and r.json()["enabled"] and r.json()["notes"].startswith("Orders"), r.text)
+
+    # several quick messages → one AI call, one reply listing the real services
+    await bm.post("/_llm_script", json={"answers": [
+        {"intent": "order", "lang": "tl", "platform": "tiktok", "category": "Followers", "quantity": 1000, "link": "", "reply": ""},
+        {"intent": "choose", "lang": "tl", "option": 2},
+        {"intent": "yes", "lang": "tl"}]})
+    await fb_send("p1", "pa followers sa tiktok")
+    await asyncio.sleep(0.3)
+    await fb_send("p1", "1k https://www.tiktok.com/@juan")
+    sent1 = await fb_wait("p1", 1)
+    calls = (await bm.get("/_llm_calls")).json()
+    check("bot: quick messages answered together, once", len(calls) == 1 and len(sent1) == 1
+          and "pa followers sa tiktok\n1k https://www.tiktok.com/@juan" in calls[0]["messages"][-1]["content"], (calls, sent1))
+    check("bot: AI sees the shop notes and the real categories, not prices", "Orders start within 1 hour." in calls[0]["messages"][0]["content"]
+          and "tiktok: " in calls[0]["messages"][0]["content"] and "₱" not in calls[0]["messages"][0]["content"], calls[0]["messages"][0]["content"][:300])
+    t1 = fb_text(sent1[0])
+    check("bot: options with real prices for the quantity, in Taglish", "1)" in t1 and "2)" in t1 and "₱" in t1 and "Reply ng number" in t1, t1)
+    await fb_send("p1", "2")
+    sent2 = await fb_wait("p1", 2)
+    t2 = fb_text(sent2[1])
+    check("bot: summary with the link and total, asks YES", "https://www.tiktok.com/@juan" in t2 and "Total: ₱" in t2 and "YES" in t2, t2)
+    await fb_send("p1", "yes")
+    sent3 = await fb_wait("p1", 3)
+    btn = sent3[2]["message"].get("attachment", {}).get("payload", {}).get("buttons", [{}])[0]
+    tp = (await sql("select id, amount_php, checkout_id, bot_order from topups where bot_chat_id is not null order by created_at desc limit 1"))
+    check("bot: payment link button for the order (minimum ₱20)", btn.get("type") == "web_url" and btn.get("title", "").startswith("Pay ₱")
+          and tp and tp[0]["amount_php"] >= 20 and tp[0]["bot_order"], (sent3[2], tp))
+    await bm.post("/_pm_pay", data={"sid": tp[0]["checkout_id"], "amount_php": tp[0]["amount_php"]})
+    raw, hdr = signed(paid_event(str(tp[0]["id"]), tp[0]["amount_php"]))
+    await c.post("/webhooks/paymongo", content=raw, headers=hdr)
+    sent4 = await fb_wait("p1", 4)
+    corder = await sql("select o.id, o.source, o.quantity, o.service_id, o.link from orders o join bot_chats b on b.user_id = o.user_id where b.external_id = 'p1'")
+    check("bot: paid → order placed automatically and confirmed in chat", len(corder) == 1 and corder[0]["source"] == "chat"
+          and corder[0]["quantity"] == 1000 and corder[0]["service_id"] == 2 and f"#{corder[0]['id']}" in fb_text(sent4[3]), (corder, sent4[-1]))
+    paid_again = (await sql("select bot_order from topups where id = :i", {"i": tp[0]["id"]}))[0]["bot_order"]
+    await c.post("/webhooks/paymongo", content=raw, headers=hdr)
+    await asyncio.sleep(0.5)
+    check("bot: a repeated payment notice doesn't order twice", paid_again is None and len(await sql(
+        "select o.id from orders o join bot_chats b on b.user_id = o.user_id where b.external_id = 'p1'")) == 1)
+    await bm.post("/_llm_script", json={"answers": [{"intent": "status", "lang": "en"}]})
+    await fb_send("p1", "status of my order?")
+    sent5 = await fb_wait("p1", 5)
+    check("bot: order status from the real orders", f"#{corder[0]['id']}" in fb_text(sent5[4]) and "Pending" in fb_text(sent5[4]), sent5[-1])
+
+    # spam twice in a row → silenced; nothing more is sent, no more AI calls
+    await bm.post("/_llm_script", json={"answers": [{"intent": "spam", "lang": "en"}, {"intent": "spam", "lang": "en"}]})
+    await fb_send("p2", "asdkjh")
+    s1 = await fb_wait("p2", 1)
+    await fb_send("p2", "lol qwe")
+    await asyncio.sleep(1.6)
+    await fb_send("p2", "zzz")
+    await asyncio.sleep(1.6)
+    s2 = (await bm.get("/_sent", params={"psid": "p2"})).json()
+    muted = (await sql("select id, muted_at from bot_chats where external_id = 'p2'"))[0]
+    check("bot: spam → one warning, then silence", len(s1) == 1 and len(s2) == 1 and muted["muted_at"] is not None
+          and len((await bm.get("/_llm_calls")).json()) == 2, (s2, muted))
+    r = await ca.post(f"/admin/api/bot/chats/{muted['id']}/unmute")
+    check("bot: owner can unmute", r.status_code == 200 and (await sql("select muted_at from bot_chats where id = :i", {"i": muted["id"]}))[0]["muted_at"] is None, r.text)
+    chats_b = (await ca.get("/admin/api/bot")).json()
+    tr = (await ca.get(f"/admin/api/bot/chats/{chats_b['chats'][0]['id']}")).json()
+    check("bot: conversations and transcripts in the control panel", len(chats_b["chats"]) >= 2 and tr["messages"]
+          and chats_b["stats"]["orders"] >= 1 and chats_b["stats"]["cost_all"] > 0, chats_b["stats"])
+
+    # test chat in the control panel: same engine, no payment link, no order
+    await bm.post("/_llm_script", json={"answers": [
+        {"intent": "order", "lang": "en", "platform": "tiktok", "category": "Followers", "quantity": 500},
+        {"intent": "choose", "option": 1}, {"intent": "yes"}]})
+    n_tp = len(await sql("select id from topups"))
+    r1 = (await ca.post("/admin/api/bot/test", json={"session": "tst1", "text": "500 tiktok followers https://tiktok.com/@me"})).json()
+    r2 = (await ca.post("/admin/api/bot/test", json={"session": "tst1", "text": "1"})).json()
+    r3 = (await ca.post("/admin/api/bot/test", json={"session": "tst1", "text": "yes"})).json()
+    check("bot: test chat walks the same steps without paying or ordering", "1)" in r1["replies"][0]["text"]
+          and "Total: ₱" in r2["replies"][0]["text"] and "Test mode" in r3["replies"][0]["text"]
+          and len(await sql("select id from topups")) == n_tp and r1["debug"]["ai"]["intent"] == "order", (r1, r2, r3))
+    await ca.post("/admin/api/bot/test/reset", json={"session": "tst1"})
+    check("bot: test chat reset", not await sql("select id from bot_chats where external_id = 'tst1'"))
+    r = await c.post("/admin/api/bot/test", json={"session": "tst2", "text": "hi"})
+    check("bot: customers can't use the test chat", r.status_code == 401, r.text)
+    await ca.put("/admin/api/bot", json={"enabled": False})
+    await bm.aclose()
+
     await ca.post("/admin/api/logout")
     r = await ca.get("/admin/api/overview")
     check("admin: logout ends the session", r.status_code == 401, r.text)

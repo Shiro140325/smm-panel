@@ -57,6 +57,8 @@ async def transaction():
 
 
 async def get_db():
-    """FastAPI dependency: one transaction per request, committed on success."""
+    """FastAPI dependency: one transaction per request, committed on success. Use it as
+    Depends(get_db, scope="function") so the commit happens before the response is sent: a client
+    that reads right after a write then sees it."""
     async with engine.begin() as conn:
         yield DB(conn)

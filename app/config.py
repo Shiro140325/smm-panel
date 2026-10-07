@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     resend_api_url: str = "https://api.resend.com"
     email_from: str = "SMM Shiro <noreply@smmshiro.com>"
     email_reply_to: str = "support@smmshiro.com"
+    openrouter_api_key: str = ""      # Messenger bot AI (app/bot); the bot is off while empty
+    openrouter_api_url: str = "https://openrouter.ai/api/v1"
+    meta_page_token: str = ""         # Facebook Page access token (Messenger Send API)
+    meta_app_secret: str = ""         # signs the Messenger webhook
+    meta_verify_token: str = ""       # pasted in the Meta app's webhook settings
+    meta_graph_url: str = "https://graph.facebook.com/v21.0"
+    bot_debounce_seconds: float = 5.0  # wait this long after a customer's last message before replying
+    bot_min_payment_php: int = 20     # smallest chat payment link (the rest stays as chat credit)
     trial_enabled: bool = True        # new accounts get one free trial order (app/trial.py) with the welcome guide
     referral_pct: float = 5.0        # affiliate commission: % of each top-up a referred customer completes
 

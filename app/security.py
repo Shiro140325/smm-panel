@@ -42,7 +42,7 @@ VERIFY_FIRST = "Verify your email first"
 VERIFY_OPEN = {"/auth/me", "/auth/verify", "/auth/verify/send", "/auth/verify/email"}
 
 
-async def current_user(request: Request, db: DB = Depends(get_db)) -> dict:
+async def current_user(request: Request, db: DB = Depends(get_db, scope="function")) -> dict:
     token = request.cookies.get(COOKIE)
     if not token:
         raise HTTPException(401, "Not logged in")
