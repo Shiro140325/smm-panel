@@ -247,14 +247,17 @@ alter table users add column if not exists channel text;          -- 'messenger'
 create table if not exists bot_menu (
   id                  serial primary key,
   name                text not null,                      -- what the customer sees, e.g. "TikTok Followers"
-  per_qty             integer not null check (per_qty > 0),   -- the price is for this many (e.g. 1000)
-  price_php           numeric(10,2) not null check (price_php > 0),
+  prices              jsonb not null default '[]',         -- the price list: [[amount, pesos], ...], e.g. [[100, 20], [1000, 125]]
   provider_service_id bigint not null,                    -- SMMGen service id
   active              boolean not null default true,
   sort                integer not null default 0,
   created_at          timestamptz not null default now()
 );
 alter table orders add column if not exists label text;   -- chat orders: the menu item's name
+-- menu items went from "price per N" to a price list
+alter table bot_menu add column if not exists prices jsonb not null default '[]';
+alter table bot_menu drop column if exists per_qty;
+alter table bot_menu drop column if exists price_php;
 
 -- Messenger bot panel (botfb.smmshiro.com): a 6-digit PIN; 3 wrong in a row → only the owner's account password opens it
 create table if not exists bot_panel (

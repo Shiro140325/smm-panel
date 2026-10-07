@@ -1,6 +1,6 @@
 import asyncio
 import logging
-import math
+import json
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -123,7 +123,7 @@ async def place_order(user_id: int, service_id: int, link: str, quantity: int, c
 async def chat_item(db, item_id: int) -> dict | None:
     """A bot menu item with its SMMGen service (min, max, type, cost), or None if it can't be ordered."""
     return await db.fetch_one("""
-        select m.id, m.name, m.per_qty, m.price_php, m.provider_service_id, m.active,
+        select m.id, m.name, m.prices, m.provider_service_id, m.active,
                p.id as provider_id, ps.name as provider_name, ps.min_qty, ps.max_qty, ps.rate, ps.type, p.currency
           from bot_menu m
           join providers p on p.active
@@ -134,19 +134,25 @@ async def chat_item(db, item_id: int) -> dict | None:
 
 
 def chat_price(item: dict, quantity: int) -> float:
-    """The menu price for this many (price per N, pro rata), rounded up to the centavo."""
-    return math.ceil(round(float(item["price_php"]) * quantity / item["per_qty"] * 100, 6)) / 100
+    """The owner's price for this many, from the item's price list (see app/bot/pricing.py)."""
+    from app.bot import pricing
+    prices = item["prices"] if not isinstance(item["prices"], str) else json.loads(item["prices"])
+    return pricing.price_for(prices, quantity)
 
 
-async def place_chat_order(user_id: int, item_id: int, link: str, quantity: int) -> dict:
+async def place_chat_order(user_id: int, item_id: int, link: str, quantity: int, comments_text: str | None = None) -> dict:
     """Charge and place a Messenger order for a bot menu item: the owner's price, sent straight to the
     item's SMMGen service. Same queue, status sync, refunds and cancellations as website orders."""
     async with transaction() as db:
         item = await chat_item(db, item_id)
         if not item or not item["active"]:
             raise HTTPException(404, "That item isn't available right now")
+        comments = None
         if (item["type"] or "").strip().lower() == CUSTOM_COMMENTS:
-            raise HTTPException(400, "That item needs typed comments; it can't be ordered in chat")
+            lines = [ln.strip() for ln in (comments_text or "").splitlines() if ln.strip()]
+            if not lines:
+                raise HTTPException(400, "Send the comments, one per line")
+            quantity, comments = len(lines), "\n".join(lines)   # quantity = number of comments
         if not item["min_qty"] <= quantity <= item["max_qty"]:
             raise HTTPException(400, f"Quantity must be between {item['min_qty']:,} and {item['max_qty']:,}")
         price = chat_price(item, quantity)
@@ -162,9 +168,9 @@ async def place_chat_order(user_id: int, item_id: int, link: str, quantity: int)
             raise HTTPException(402, "Not enough balance")
         queued = await order_queue.should_queue(db)
         order = await db.fetch_one("""
-            insert into orders (user_id, service_id, provider_id, link, quantity, price_php, source, status, label)
-            values (:u, :s, :p, :l, :q, :price, 'chat', :st, :label) returning id
-        """, {"u": user_id, "s": sid, "p": item["provider_id"], "l": link, "q": quantity, "price": price,
+            insert into orders (user_id, service_id, provider_id, link, quantity, price_php, comments, source, status, label)
+            values (:u, :s, :p, :l, :q, :price, :c, 'chat', :st, :label) returning id
+        """, {"u": user_id, "s": sid, "p": item["provider_id"], "l": link, "q": quantity, "price": price, "c": comments,
               "st": "queued" if queued else "creating", "label": item["name"]})
         await db.execute("insert into ledger (user_id, delta, reason, ref) values (:u, :d, 'order', :r)",
                          {"u": user_id, "d": -price, "r": str(order["id"])})

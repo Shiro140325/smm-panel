@@ -1,6 +1,6 @@
 """Messenger bot conversation engine.
 
-The bot sells only the owner's bot menu (name, price per N, SMMGen service id), nothing from the
+The bot sells only the owner's bot menu (name, price list, SMMGen service id), nothing from the
 website catalog. The AI only reads the customer's messages and fills in a small form (what they want,
 which menu item, quantity, link, language). Everything that matters is done here in code: the menu
 prices, the next question, the summary, the payment link, placing the order, order status. The AI
@@ -17,7 +17,7 @@ import re
 import secrets
 import time
 
-from app.bot import llm
+from app.bot import llm, pricing
 from app.config import get_settings
 from app.db import transaction
 
@@ -37,7 +37,11 @@ T = {
     "no_menu": ("Sorry, ordering isn't available right now.", "Pasensya, wala pang pwedeng i-order ngayon."),
     "ask_qty": ("How many? ({mn} to {mx})", "Ilan? ({mn} hanggang {mx})"),
     "bad_qty": ("{name}: {mn} to {mx} only. How many?", "{name}: {mn} hanggang {mx} lang. Ilan?"),
-    "price": ("{name}: ₱{price} per {per}.", "{name}: ₱{price} kada {per}."),
+    "price": ("{name}: {list}.", "{name}: {list}."),
+    "ask_comments": ("Now send your comments, one per line. Each line is 1 comment.",
+                     "Send mo na yung comments, isa kada line. Bawat line = 1 comment."),
+    "bad_comments": ("{name}: {mn} to {mx} comments only. Send them again, one per line.",
+                     "{name}: {mn} hanggang {mx} comments lang. Send ulit, isa kada line."),
     "ask_link": ("Send the link to your post, video or profile.", "Send mo yung link ng post, video o profile mo."),
     "summary": ("{q} {name}\n{link}\nTotal: ₱{total}\nReply YES to get the payment link.",
                 "{q} {name}\n{link}\nTotal: ₱{total}\nReply YES para sa payment link."),
@@ -98,20 +102,23 @@ async def save_settings(db, model: str | None = None, notes: str | None = None, 
 
 
 async def menu(db) -> list[dict]:
-    """The bot menu: active items whose SMMGen service exists (and isn't a typed-comments one)."""
+    """The bot menu: active items with a price list whose SMMGen service exists."""
     rows = await db.fetch_all("""
-        select m.id, m.name, m.per_qty, m.price_php, ps.min_qty as min, ps.max_qty as max
+        select m.id, m.name, m.prices, ps.min_qty as min, ps.max_qty as max,
+               lower(coalesce(ps.type, '')) = 'custom comments' as custom
           from bot_menu m
           join provider_services ps on ps.provider_service_id = m.provider_service_id
           join providers p on p.id = ps.provider_id and p.active
-         where m.active and lower(coalesce(ps.type, '')) <> 'custom comments'
+         where m.active
          order by m.sort, m.id
     """)
     seen, out = set(), []
     for r in rows:   # one row per item even if two providers list the same id
         if r["id"] not in seen:
             seen.add(r["id"])
-            out.append({**dict(r), "price_php": float(r["price_php"])})
+            prices = r["prices"] if not isinstance(r["prices"], str) else json.loads(r["prices"])
+            if pricing.clean(prices):
+                out.append({**dict(r), "prices": prices})
     return out
 
 
@@ -121,12 +128,27 @@ def menu_text(items: list[dict]) -> str:
 
 
 def menu_lines(items: list[dict], lang: str) -> str:
-    kada = "kada" if lang == "tl" else "per"
-    return "\n".join(f"{i}) {m['name']} · ₱{money(m['price_php'])} {kada} {m['per_qty']:,}" for i, m in enumerate(items, 1))
+    return "\n".join(f"{i}) {m['name']} · {pricing.price_list_text(m['prices'])}" for i, m in enumerate(items, 1))
 
 
 def item_total(item: dict, qty: int) -> float:
-    return math.ceil(round(item["price_php"] * qty / item["per_qty"] * 100, 6)) / 100
+    return pricing.price_for(item["prices"], qty)
+
+
+CANCEL_WORDS = {"cancel", "no", "stop", "wag na", "huwag na", "hindi", "ayoko", "cancel na"}
+
+
+def _comments_turn(items: list[dict], draft: dict, text: str, lang: str) -> str:
+    """The customer's typed comments for a custom-comments item: taken as they wrote them, one per line."""
+    item = next((m for m in items if m["id"] == draft.get("item_id")), None)
+    if not item:
+        draft.clear()
+        return t("menu", lang, lines=menu_lines(items, lang)) if items else t("no_menu", lang)
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip() and not LINK_RE.fullmatch(ln.strip())]
+    if not item["min"] <= len(lines) <= item["max"]:
+        return t("bad_comments", lang, name=item["name"], mn=f"{item['min']:,}", mx=f"{item['max']:,}")
+    draft["comments"] = "\n".join(ln[:300] for ln in lines)
+    return _next_step(items, draft, lang)
 
 
 # ------------------------------------------------------------------ the turn
@@ -157,6 +179,11 @@ async def respond(db, chat: dict, texts: list[str], test: bool = False, before_i
     settings = await read_settings(db)
     items = await menu(db)
     joined = "\n".join(texts)
+    if draft.get("step") == "comments":   # their comments, word for word: no AI needed
+        if joined.strip().lower().rstrip(".!") in CANCEL_WORDS:
+            return await _save(db, chat, st, {}, [{"text": t("cleared", lang)}], {"ai": {"intent": "no"}})
+        reply = _comments_turn(items, draft, joined, lang)
+        return await _save(db, chat, st, draft, [{"text": reply}], {"ai": {"intent": "comments"}})
     notes = f"\nOwner's instructions (follow them; also facts for questions): {settings['notes']}" if settings["notes"] else ""
     shown = {k: draft[k] for k in ("item_name", "quantity", "link") if draft.get(k)}
     system = SYSTEM.format(menu=menu_text(items) or "(empty)", notes=notes,
@@ -226,6 +253,7 @@ def _merge(items: list[dict], draft: dict, ai: dict, text: str) -> None:
         pick = 0
     if 1 <= pick <= len(items) and items[pick - 1]["id"] != draft.get("item_id"):
         draft.update(item_id=items[pick - 1]["id"], item_name=items[pick - 1]["name"])
+        draft.pop("comments", None)
     try:
         q = int(float(ai.get("quantity") or 0))
     except (TypeError, ValueError):
@@ -250,9 +278,20 @@ def _next_step(items: list[dict], draft: dict, lang: str, price_only: bool = Fal
         draft["step"] = "choose"
         return t("menu", lang, lines=menu_lines(items, lang))
     draft["step"] = "collect"
+    head = t("price", lang, name=item["name"], list=pricing.price_list_text(item["prices"])) + "\n" if price_only else ""
+    if item["custom"]:   # typed comments: the link, then the comments; how many = how many lines
+        draft.pop("quantity", None)
+        if not draft.get("link"):
+            return head + t("ask_link", lang)
+        if not draft.get("comments"):
+            draft["step"] = "comments"
+            return head + t("ask_comments", lang)
+        qty = len(draft["comments"].splitlines())
+        total = item_total(item, qty)
+        draft.update(step="confirm", total=total, quantity=qty)
+        return t("summary", lang, q=f"{qty:,}", name=item["name"], link=draft["link"], total=money(total))
     qty = draft.get("quantity")
     if not qty:
-        head = t("price", lang, name=item["name"], price=money(item["price_php"]), per=f"{item['per_qty']:,}") + " " if price_only else ""
         return head + t("ask_qty", lang, mn=f"{item['min']:,}", mx=f"{item['max']:,}")
     if not item["min"] <= qty <= item["max"]:
         draft.pop("quantity", None)
@@ -302,6 +341,8 @@ async def _checkout(db, chat: dict, draft: dict, lang: str, test: bool) -> list[
     """The customer said YES to the summary: pay from credit, or a payment link for the difference."""
     total = float(draft.get("total") or 0)
     order = {"item_id": draft["item_id"], "link": draft["link"], "quantity": draft["quantity"]}
+    if draft.get("comments"):
+        order["comments"] = draft["comments"]
     if test:
         draft.clear()
         return [{"text": t("test_pay", lang, amt=money(total))}]
@@ -332,7 +373,7 @@ async def _place(user_id: int, order: dict) -> dict:
     from fastapi import HTTPException
     from app.routers.orders import place_chat_order
     try:
-        return await place_chat_order(user_id, order["item_id"], order["link"], order["quantity"])
+        return await place_chat_order(user_id, order["item_id"], order["link"], order["quantity"], order.get("comments"))
     except HTTPException as e:
         return {"error": str(e.detail)}
 

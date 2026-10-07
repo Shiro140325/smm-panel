@@ -708,21 +708,35 @@ async def main():
     r = await bp.put("/botfb/api/bot", json={"enabled": True, "notes": "Orders start within 1 hour."})
     check("bot: switched on, notes saved", r.status_code == 200 and r.json()["enabled"] and r.json()["notes"].startswith("Orders"), r.text)
 
-    # the bot menu: the owner's items, price per N, SMMGen service id
-    lk = (await bp.get("/botfb/api/bot/lookup", params={"id": 2, "per_qty": 1000})).json()
-    check("menu: looks up the SMMGen service and the cost", lk.get("name") and lk["min_qty"] == 100 and lk["cost_php"] > 0, lk)
-    r = await bp.post("/botfb/api/bot/menu", json={"name": "Comments", "per_qty": 10, "price_php": 20, "provider_service_id": 3})
-    check("menu: typed-comments services refused", r.status_code == 400, r.text)
-    r = await bp.post("/botfb/api/bot/menu", json={"name": "Ghost", "per_qty": 1000, "price_php": 20, "provider_service_id": 99999})
+    # the bot menu: the owner's items, a price list each, SMMGen service id
+    from app.bot.pricing import price_for, price_list_text
+    fbl = [[100, 10], [500, 25], [1000, 50], [5000, 150], [10000, 250]]
+    check("pricing: listed amounts cost exactly their price", [price_for(fbl, q) for q, _ in fbl] == [10, 25, 50, 150, 250])
+    check("pricing: other amounts from the nearest listed one", price_for(fbl, 1500) == 75 and price_for(fbl, 750) == 38
+          and price_for(fbl, 20000) == 500 and price_for(fbl, 50) == 5, [price_for(fbl, q) for q in (1500, 750, 20000, 50)])
+    check("pricing: never more than a bigger amount", price_for(fbl, 2500) == 90 and price_for(fbl, 2999) <= 150
+          and all(price_for(fbl, q) <= price_for(fbl, q + 50) for q in range(50, 12000, 50)))
+    check("pricing: list text", price_list_text(fbl) == "100 = ₱10 · 500 = ₱25 · 1K = ₱50 · 5K = ₱150 · 10K = ₱250"
+          and price_list_text([[1, 2]]) == "₱2 each" and price_for([[1, 2]], 7) == 14)
+    lk = (await bp.get("/botfb/api/bot/lookup", params={"id": 2})).json()
+    check("menu: looks up the SMMGen service and the cost", lk.get("name") and lk["min_qty"] == 100 and lk["cost_1k_php"] > 0, lk)
+    r = await bp.post("/botfb/api/bot/menu", json={"name": "Ghost", "prices": [{"qty": 1000, "price": 20}], "provider_service_id": 99999})
     check("menu: unknown SMMGen id refused", r.status_code == 400, r.text)
-    mi1 = (await bp.post("/botfb/api/bot/menu", json={"name": "TikTok Followers", "per_qty": 1000, "price_php": 50, "provider_service_id": 1, "sort": 0})).json()["id"]
-    mi2 = (await bp.post("/botfb/api/bot/menu", json={"name": "TikTok Followers HQ", "per_qty": 1000, "price_php": 120, "provider_service_id": 2, "sort": 1})).json()["id"]
-    mi3 = (await bp.post("/botfb/api/bot/menu", json={"name": "Hidden thing", "per_qty": 100, "price_php": 5, "provider_service_id": 1, "active": False, "sort": 2})).json()["id"]
+    r = await bp.post("/botfb/api/bot/menu", json={"name": "Tiny", "prices": [{"qty": 50, "price": 5}], "provider_service_id": 1})
+    check("menu: an amount below SMMGen's minimum refused", r.status_code == 400 and "100" in r.text, r.text)
+    r = await bp.post("/botfb/api/bot/menu", json={"name": "Twice", "prices": [{"qty": 100, "price": 5}, {"qty": 100, "price": 6}], "provider_service_id": 1})
+    check("menu: the same amount twice refused", r.status_code == 400, r.text)
+    mi1 = (await bp.post("/botfb/api/bot/menu", json={"name": "TikTok Followers", "provider_service_id": 1, "sort": 0,
+                                                      "prices": [{"qty": 1000, "price": 50}, {"qty": 100, "price": 10}, {"qty": 500, "price": 25}]})).json()["id"]
+    mi2 = (await bp.post("/botfb/api/bot/menu", json={"name": "TikTok Followers HQ", "prices": [{"qty": 1000, "price": 120}], "provider_service_id": 2, "sort": 1})).json()["id"]
+    mi3 = (await bp.post("/botfb/api/bot/menu", json={"name": "Hidden thing", "prices": [{"qty": 100, "price": 5}], "provider_service_id": 1, "active": False, "sort": 2})).json()["id"]
+    mi4 = (await bp.post("/botfb/api/bot/menu", json={"name": "Custom Comments", "prices": [{"qty": 1, "price": 2}], "provider_service_id": 3, "sort": 3})).json()["id"]
     mn = (await bp.get("/botfb/api/bot/menu")).json()
-    check("menu: listed with SMMGen name, cost and limits", [m["id"] for m in mn] == [mi1, mi2, mi3] and mn[1]["smmgen"]["min"] == 100
-          and mn[1]["smmgen"]["cost_php"] > 0 and mn[0]["price_php"] == 50, mn)
-    r = await bp.put(f"/botfb/api/bot/menu/{mi3}", json={"name": "Hidden thing", "per_qty": 100, "price_php": 6, "provider_service_id": 1, "active": False, "sort": 2})
-    check("menu: edit an item", r.status_code == 200 and (await bp.get("/botfb/api/bot/menu")).json()[2]["price_php"] == 6, r.text)
+    check("menu: listed with price list (sorted), SMMGen name, cost and limits", [m["id"] for m in mn] == [mi1, mi2, mi3, mi4]
+          and mn[1]["smmgen"]["min"] == 100 and mn[1]["smmgen"]["cost_1k_php"] > 0
+          and [p["qty"] for p in mn[0]["prices"]] == [100, 500, 1000] and mn[3]["smmgen"]["custom_comments"], mn)
+    r = await bp.put(f"/botfb/api/bot/menu/{mi3}", json={"name": "Hidden thing", "prices": [{"qty": 100, "price": 6}], "provider_service_id": 1, "active": False, "sort": 2})
+    check("menu: edit an item", r.status_code == 200 and (await bp.get("/botfb/api/bot/menu")).json()[2]["prices"][0]["price"] == 6, r.text)
 
     # several quick messages → one AI call, one reply listing the real services
     await bm.post("/_llm_script", json={"answers": [
@@ -740,12 +754,13 @@ async def main():
     check("bot: AI sees the notes and only the active menu names, no prices", "Orders start within 1 hour." in sysmsg
           and "1: TikTok Followers\n2: TikTok Followers HQ" in sysmsg and "Hidden thing" not in sysmsg and "₱" not in sysmsg, sysmsg[:400])
     t1 = fb_text(sent1[0])
-    check("bot: unclear item → the menu with your prices, in Taglish", "1) TikTok Followers · ₱50.00 kada 1,000" in t1
-          and "2) TikTok Followers HQ · ₱120.00 kada 1,000" in t1 and "Hidden" not in t1 and "Reply ng number" in t1, t1)
+    check("bot: unclear item → the menu with your price lists, in Taglish", "1) TikTok Followers · 100 = ₱10 · 500 = ₱25 · 1K = ₱50" in t1
+          and "2) TikTok Followers HQ · 1K = ₱120" in t1 and "3) Custom Comments · ₱2 each" in t1 and "Hidden" not in t1
+          and "Reply ng number" in t1, t1)
     await fb_send("p1", "2")
     sent2 = await fb_wait("p1", 2)
     t2 = fb_text(sent2[1])
-    check("bot: summary at the menu price (₱120 per 1,000), asks YES", "1,000 TikTok Followers HQ" in t2 and "https://www.tiktok.com/@juan" in t2
+    check("bot: summary at the listed price (1K = ₱120), asks YES", "1,000 TikTok Followers HQ" in t2 and "https://www.tiktok.com/@juan" in t2
           and "Total: ₱120.00" in t2 and "YES" in t2, t2)
     await fb_send("p1", "yes")
     sent3 = await fb_wait("p1", 3)
@@ -815,15 +830,37 @@ async def main():
     r2 = (await bp.post("/botfb/api/bot/test", json={"session": "tst1", "text": "500"})).json()
     r2b = (await bp.post("/botfb/api/bot/test", json={"session": "tst1", "text": "50 https://tiktok.com/@me"})).json()
     r3 = (await bp.post("/botfb/api/bot/test", json={"session": "tst1", "text": "yes"})).json()
-    check("bot: test chat: price per N, then how many, then the link", "TikTok Followers: ₱50.00 per 1,000" in r1["replies"][0]["text"]
+    check("bot: test chat: the price list, then how many, then the link", "TikTok Followers: 100 = ₱10 · 500 = ₱25 · 1K = ₱50." in r1["replies"][0]["text"]
           and "How many? (100 to 50,000)" in r1["replies"][0]["text"] and "Send the link" in r2["replies"][0]["text"], (r1, r2))
     check("bot: below SMMGen's minimum → asks again", "100 to 50,000 only" in r2b["replies"][0]["text"], r2b)
     check("bot: test mode never pays or orders", "Test mode" not in r3["replies"][0]["text"] or len(await sql("select id from topups")) == n_tp, r3)
     await bm.post("/_llm_script", json={"answers": [{"intent": "order", "lang": "en", "item": 1, "quantity": 500}, {"intent": "yes"}]})
     r4 = (await bp.post("/botfb/api/bot/test", json={"session": "tst1", "text": "500 tiktok followers https://tiktok.com/@me"})).json()
     r5 = (await bp.post("/botfb/api/bot/test", json={"session": "tst1", "text": "yes"})).json()
-    check("bot: 500 at ₱50 per 1,000 = ₱25.00; YES in test mode makes no payment", "Total: ₱25.00" in r4["replies"][0]["text"]
+    check("bot: 500 is listed at ₱25; YES in test mode makes no payment", "Total: ₱25.00" in r4["replies"][0]["text"]
           and "Test mode" in r5["replies"][0]["text"] and len(await sql("select id from topups")) == n_tp, (r4, r5))
+    await bm.post("/_llm_script", json={"answers": [{"intent": "order", "lang": "en", "item": 1, "quantity": 2000}]})
+    r6 = (await bp.post("/botfb/api/bot/test", json={"session": "tst1", "text": "2k tiktok followers https://tiktok.com/@me"})).json()
+    check("bot: an unlisted amount is priced from the nearest one (2,000 at 1K's rate = ₱100)", "Total: ₱100.00" in r6["replies"][0]["text"], r6)
+
+    # typed comments: the link, then the comments word for word (no AI); how many = how many lines
+    await bp.post("/botfb/api/bot/test/reset", json={"session": "tst1"})
+    await bm.post("/_llm_script", json={"answers": [{"intent": "order", "lang": "en", "item": 3, "quantity": 0}, {"intent": "yes"}]})
+    cm1 = (await bp.post("/botfb/api/bot/test", json={"session": "tst1", "text": "custom comments po https://tiktok.com/@me/video/1"})).json()
+    n_calls = len((await bm.get("/_llm_calls")).json())
+    cm2 = (await bp.post("/botfb/api/bot/test", json={"session": "tst1", "text": "Ganda!\nWow ang galing\n\nSana all"})).json()
+    check("bot: comments item asks for the comments after the link", "one per line" in cm1["replies"][0]["text"], cm1)
+    check("bot: comments taken as typed, no AI call, 3 lines × ₱2 = ₱6", "3 Custom Comments" in cm2["replies"][0]["text"]
+          and "Total: ₱6.00" in cm2["replies"][0]["text"] and len((await bm.get("/_llm_calls")).json()) == n_calls
+          and cm2["draft"].get("comments") == "Ganda!\nWow ang galing\nSana all", cm2)
+    cm3 = (await bp.post("/botfb/api/bot/test", json={"session": "tst1", "text": "yes"})).json()
+    check("bot: comments order YES in test mode", "Test mode" in cm3["replies"][0]["text"] and "₱6.00" in cm3["replies"][0]["text"], cm3)
+    from app.routers.orders import place_chat_order
+    await sql("insert into ledger (user_id, delta, reason, ref) values (:u, 10, 'adjustment', 'test')", {"u": owner})
+    co = await place_chat_order(owner, mi4, "https://tiktok.com/@me/video/1", 0, "First one\n\nSecond one")
+    corow = (await sql("select quantity, price_php, comments, label from orders where id = :i", {"i": co["id"]}))[0]
+    check("bot: a comments order sends the lines to SMMGen, priced per comment", corow["quantity"] == 2 and float(corow["price_php"]) == 4
+          and corow["comments"] == "First one\nSecond one" and corow["label"] == "Custom Comments", corow)
     await bp.post("/botfb/api/bot/test/reset", json={"session": "tst1"})
     check("bot: test chat reset", not await sql("select id from bot_chats where external_id = 'tst1'"))
     r = await c.post("/botfb/api/bot/test", json={"session": "tst2", "text": "hi"})

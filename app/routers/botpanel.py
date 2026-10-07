@@ -3,6 +3,7 @@
 Three wrong PINs in a row lock the PIN: only the owner's smmshiro account password opens the panel then
 (and resets the count). The PIN's hash, the count and the owner's user id live in the bot_panel row.
 """
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -12,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from app import fx
 from app.bot import engine as bot_engine
+from app.bot import pricing
 from app.config import get_settings
 from app.db import DB, get_db, transaction
 from app.ratelimit import client_ip
@@ -196,29 +198,40 @@ async def _provider_service(db, psid: int):
          where ps.provider_service_id = :id order by p.id limit 1""", {"id": psid})
 
 
-def _cost_php(svc, per_qty: int) -> float:
-    """What SMMGen charges us for per_qty of this service, in pesos (live rate, no buffer)."""
+def _cost_1k(svc) -> float:
+    """What SMMGen charges us for 1,000 of this service, in pesos (live rate, no buffer)."""
     rate = fx.usd_to_php_raw() if (svc["currency"] or "USD").upper() == "USD" else 1.0
-    return round(float(svc["rate"]) * rate * per_qty / 1000, 2)
+    return round(float(svc["rate"]) * rate, 4)
+
+
+def _is_custom(svc) -> bool:
+    return (svc["type"] or "").strip().lower() == "custom comments"
 
 
 @router.get("/bot/lookup", dependencies=[Depends(require_bot)])
-async def bot_lookup(id: int, per_qty: int = 1000, db: DB = Depends(get_db, scope="function")):
+async def bot_lookup(id: int, db: DB = Depends(get_db, scope="function")):
     """SMMGen's details for a service id, to fill in a menu item."""
     svc = await _provider_service(db, id)
     if not svc:
         raise HTTPException(404, f"SMMGen has no service #{id} (or it isn't in the synced catalog yet)")
-    return {**dict(svc), "rate": float(svc["rate"]), "cost_php": _cost_php(svc, max(1, per_qty)),
-            "custom_comments": (svc["type"] or "").strip().lower() == "custom comments"}
+    return {**dict(svc), "rate": float(svc["rate"]), "cost_1k_php": _cost_1k(svc), "custom_comments": _is_custom(svc)}
+
+
+class PriceIn(BaseModel):
+    qty: int = Field(gt=0, le=100_000_000)
+    price: float = Field(gt=0, le=1_000_000)
 
 
 class MenuItemIn(BaseModel):
     name: str = Field(min_length=2, max_length=60)
-    per_qty: int = Field(gt=0, le=1_000_000)
-    price_php: float = Field(gt=0, le=1_000_000)
     provider_service_id: int = Field(gt=0)
+    prices: list[PriceIn] = Field(min_length=1, max_length=20)
     active: bool = True
     sort: int = 0
+
+
+def _prices(raw) -> list:
+    return json.loads(raw) if isinstance(raw, str) else (raw or [])
 
 
 @router.get("/bot/menu", dependencies=[Depends(require_bot)])
@@ -227,38 +240,42 @@ async def bot_menu(db: DB = Depends(get_db, scope="function")):
     out = []
     for r in rows:
         svc = await _provider_service(db, r["provider_service_id"])
-        cost = _cost_php(svc, r["per_qty"]) if svc else None
-        out.append({**dict(r), "price_php": float(r["price_php"]),
-                    "smmgen": {"name": svc["name"], "min": svc["min_qty"], "max": svc["max_qty"], "cost_php": cost,
-                               "custom_comments": (svc["type"] or "").strip().lower() == "custom comments"} if svc else None})
+        out.append({**dict(r), "prices": [{"qty": q, "price": p} for q, p in pricing.clean(_prices(r["prices"]))],
+                    "smmgen": {"name": svc["name"], "min": svc["min_qty"], "max": svc["max_qty"], "cost_1k_php": _cost_1k(svc),
+                               "custom_comments": _is_custom(svc)} if svc else None})
     return out
 
 
-async def _check_menu_item(db, body: MenuItemIn) -> None:
+async def _check_menu_item(db, body: MenuItemIn) -> str:
     svc = await _provider_service(db, body.provider_service_id)
     if not svc:
         raise HTTPException(400, f"SMMGen has no service #{body.provider_service_id}")
-    if (svc["type"] or "").strip().lower() == "custom comments":
-        raise HTTPException(400, "That SMMGen service needs typed comments, which the bot can't take")
+    qtys = [p.qty for p in body.prices]
+    if len(set(qtys)) != len(qtys):
+        raise HTTPException(400, "Each amount can be in the price list once")
+    for q in qtys:
+        if not svc["min_qty"] <= q <= svc["max_qty"]:
+            raise HTTPException(400, f"{q:,} is outside what SMMGen #{body.provider_service_id} takes "
+                                     f"({svc['min_qty']:,} to {svc['max_qty']:,})")
+    return json.dumps(sorted([[p.qty, round(p.price, 2)] for p in body.prices]))
 
 
 @router.post("/bot/menu", dependencies=[Depends(require_bot)])
 async def bot_menu_add(body: MenuItemIn, db: DB = Depends(get_db, scope="function")):
-    await _check_menu_item(db, body)
-    row = await db.fetch_one("""insert into bot_menu (name, per_qty, price_php, provider_service_id, active, sort)
-                                values (:n, :q, :p, :ps, :a, :s) returning id""",
-                             {"n": body.name.strip(), "q": body.per_qty, "p": round(body.price_php, 2),
-                              "ps": body.provider_service_id, "a": body.active, "s": body.sort})
+    prices = await _check_menu_item(db, body)
+    row = await db.fetch_one("""insert into bot_menu (name, prices, provider_service_id, active, sort)
+                                values (:n, CAST(:pr AS jsonb), :ps, :a, :s) returning id""",
+                             {"n": body.name.strip(), "pr": prices, "ps": body.provider_service_id, "a": body.active, "s": body.sort})
     return {"id": row["id"]}
 
 
 @router.put("/bot/menu/{item_id}", dependencies=[Depends(require_bot)])
 async def bot_menu_edit(item_id: int, body: MenuItemIn, db: DB = Depends(get_db, scope="function")):
-    await _check_menu_item(db, body)
-    row = await db.fetch_one("""update bot_menu set name = :n, per_qty = :q, price_php = :p, provider_service_id = :ps,
+    prices = await _check_menu_item(db, body)
+    row = await db.fetch_one("""update bot_menu set name = :n, prices = CAST(:pr AS jsonb), provider_service_id = :ps,
                                        active = :a, sort = :s where id = :id returning id""",
-                             {"id": item_id, "n": body.name.strip(), "q": body.per_qty, "p": round(body.price_php, 2),
-                              "ps": body.provider_service_id, "a": body.active, "s": body.sort})
+                             {"id": item_id, "n": body.name.strip(), "pr": prices, "ps": body.provider_service_id,
+                              "a": body.active, "s": body.sort})
     if not row:
         raise HTTPException(404, "Menu item not found")
     return {"ok": True}

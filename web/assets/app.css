@@ -982,3 +982,17 @@ a.pill { text-decoration: none; }
 .ai-switch input:checked + .track::after { transform: translateX(16px); }
 .ai-switch input:focus-visible + .track { outline: 2px solid var(--ink); outline-offset: 2px; }
 .ai-switch input:disabled + .track { opacity: .5; }
+
+.menu-fields-2 { grid-template-columns: 2fr 1fr; }
+.price-rows { display: flex; flex-direction: column; gap: 8px; }
+.price-row { display: grid; grid-template-columns: 130px 130px 1fr auto; gap: 8px; align-items: center; }
+.pl-row { display: flex; gap: 10px; align-items: baseline; white-space: nowrap; }
+.pl-row > span:first-child { min-width: 44px; color: var(--muted); }
+.pl-row .muted, .pl-row .pl-bad { font-size: 12px; }
+.pl-bad { color: var(--bad); font-weight: 600; }
+@media (max-width: 640px) {
+  .menu-fields-2 { grid-template-columns: 1fr; }
+  .price-row { grid-template-columns: 1fr 1fr auto; }
+  .price-row .pr-profit { grid-column: 1 / -1; grid-row: 2; margin-top: -4px; }
+  .menu-table td.menu-prices { padding: 4px 0; }
+}

@@ -104,15 +104,17 @@ async function renderBot() {
   $("bot").innerHTML = `
     <section class="card panel bot-card" style="margin-bottom:18px">
       <div class="bot-row"><h3>Bot menu</h3><button type="button" class="btn btn-secondary btn-sm" id="menu-add">Add item</button></div>
-      <p class="hint" style="margin:0">The only things the bot sells, at your price, sent straight to the SMMGen service you pick. Nothing from the website's catalog, tiers or discounts.</p>
+      <p class="hint" style="margin:0">The only things the bot sells, at your price list, sent straight to the SMMGen service you pick. Nothing from the website's catalog, tiers or discounts.</p>
       <form class="menu-form hidden" id="menu-form" novalidate>
-        <div class="menu-fields">
+        <div class="menu-fields menu-fields-2">
           <div class="field"><label for="mf-name">Name customers see</label><input class="input" id="mf-name" maxlength="60" placeholder="TikTok Followers"></div>
-          <div class="field"><label for="mf-price">Price (₱)</label><input class="input" id="mf-price" type="number" step="0.01" min="0.01" placeholder="50"></div>
-          <div class="field"><label for="mf-per">Per how many</label><input class="input" id="mf-per" type="number" min="1" value="1000"></div>
           <div class="field"><label for="mf-sid">SMMGen service ID</label><input class="input" id="mf-sid" type="number" min="1" placeholder="e.g. 4521"></div>
         </div>
         <div class="hint" id="mf-info" style="margin:0"></div>
+        <div class="field"><span class="label">Price list</span>
+          <div class="price-rows" id="mf-rows"></div>
+          <button type="button" class="btn btn-ghost btn-sm" id="mf-addrow" style="align-self:flex-start">+ Add amount</button>
+          <span class="hint">Other amounts are priced from the nearest amount here, and never cost more than a bigger one.</span></div>
         <div class="bot-row"><label class="check" style="margin:0"><input type="checkbox" id="mf-active" checked> <span>On the menu</span></label>
           <span><button type="button" class="btn btn-ghost btn-sm" id="mf-cancel">Cancel</button>
           <button type="submit" class="btn btn-primary btn-sm" id="mf-save">Save item</button></span></div>
@@ -178,24 +180,29 @@ async function renderBot() {
     </div>`;
 
   /* bot menu */
-  let editing = null, menuItems = [];
+  let editing = null, menuItems = [], looked = null;
+  const peso2 = (x) => `₱${Number(x).toFixed(2).replace(/\.00$/, "")}`;
+  const kq = (q) => (q >= 1000 && q % 100 === 0 ? `${q / 1000}K` : num(q));
   const loadMenu = async () => {
     try { menuItems = await call("api/bot/menu"); } catch (e) { $("menu-list").innerHTML = `<p class="hint">${esc(e.message)}</p>`; return; }
     $("menu-list").innerHTML = menuItems.length ? `<div class="table-scroll"><table class="table menu-table"><thead><tr>
-        <th>#</th><th>Item</th><th class="num">Your price</th><th>SMMGen service</th><th class="num">Your cost</th><th class="num">Profit</th><th></th></tr></thead><tbody>
+        <th>#</th><th>Item</th><th>Price list</th><th>SMMGen service</th><th></th></tr></thead><tbody>
       ${menuItems.map((m, i) => {
-        const g = m.smmgen, profit = g && g.cost_php != null ? m.price_php - g.cost_php : null;
+        const g = m.smmgen;
+        const list = m.prices.map((p) => {
+          const cost = g ? (g.cost_1k_php * p.qty) / 1000 : null, profit = cost == null ? null : p.price - cost;
+          return `<div class="pl-row"><span>${kq(p.qty)}</span><strong>${peso2(p.price)}</strong>${profit == null ? "" :
+            `<span class="${profit < 0 ? "pl-bad" : "muted"}">${profit < 0 ? "loss" : "profit"} ${peso2(Math.abs(profit))}</span>`}</div>`;
+        }).join("");
         return `<tr class="${m.active ? "" : "muted"}">
           <td class="muted menu-n">${i + 1}</td>
-          <td class="menu-name"><strong>${esc(m.name)}</strong>${m.active ? "" : ` <span class="badge badge-canceled">Off</span>`}</td>
-          <td class="num" data-k="Price">₱${m.price_php.toFixed(2)} <span class="muted">/ ${num(m.per_qty)}</span></td>
-          <td data-k="SMMGen"><span class="mono">#${m.provider_service_id}</span><div class="hint" style="margin:2px 0 0;max-width:300px">${g ? `${esc(g.name)} · ${num(g.min)}–${num(g.max)}` : `<span style="color:var(--bad)">Not found at SMMGen</span>`}</div></td>
-          <td class="num" data-k="Your cost">${g && g.cost_php != null ? `₱${g.cost_php.toFixed(2)}` : "–"}</td>
-          <td class="num" data-k="Profit">${profit == null ? "–" : `<strong style="color:${profit < 0 ? "var(--bad)" : "inherit"}">₱${profit.toFixed(2)}</strong>`}</td>
+          <td class="menu-name"><strong>${esc(m.name)}</strong>${m.active ? "" : ` <span class="badge badge-canceled">Off</span>`}${g && g.custom_comments ? ` <span class="badge badge-pending">Typed comments</span>` : ""}</td>
+          <td class="menu-prices">${list}</td>
+          <td data-k="SMMGen"><span class="mono">#${m.provider_service_id}</span><div class="hint" style="margin:2px 0 0;max-width:300px">${g ? `${esc(g.name)} · ${num(g.min)}–${num(g.max)} · cost ${peso2(g.cost_1k_php)}/1K` : `<span style="color:var(--bad)">Not found at SMMGen</span>`}</div></td>
           <td class="menu-acts" style="white-space:nowrap"><button type="button" class="btn btn-ghost btn-sm" data-medit="${m.id}">Edit</button>
             <button type="button" class="btn btn-ghost btn-sm" data-mdel="${m.id}">Remove</button></td></tr>`;
       }).join("")}</tbody></table></div>
-      <p class="hint" style="margin:6px 0 0">Cost and profit are per the "per" amount, at today's SMMGen rate. Customers can order any amount within SMMGen's min–max; the price scales.</p>`
+      <p class="hint" style="margin:6px 0 0">Profit is after SMMGen's cost at today's rate. Customers can order any amount within SMMGen's min–max.</p>`
       : `<p class="hint" style="margin:0">No items yet. Add what the bot should sell.</p>`;
     $("menu-list").querySelectorAll("[data-medit]").forEach((b) => b.addEventListener("click", () => openForm(menuItems.find((x) => x.id === Number(b.dataset.medit)))));
     $("menu-list").querySelectorAll("[data-mdel]").forEach((b) => b.addEventListener("click", async () => {
@@ -204,25 +211,49 @@ async function renderBot() {
       loadMenu();
     }));
   };
+  const rows = () => [...$("mf-rows").querySelectorAll(".price-row")].map((r) => ({
+    el: r, qty: Number(r.querySelector("[data-q]").value), price: Number(r.querySelector("[data-p]").value) }));
+  const paintProfit = () => rows().forEach(({ el, qty, price }) => {
+    const out = el.querySelector(".pr-profit");
+    if (!looked || !qty || !price) { out.textContent = ""; return; }
+    const profit = price - (looked.cost_1k_php * qty) / 1000;
+    out.innerHTML = `<span class="${profit < 0 ? "pl-bad" : "muted"}">${profit < 0 ? "loss" : "profit"} ${peso2(Math.abs(profit))}</span>`;
+  });
+  const addRow = (qty = "", price = "") => {
+    const r = document.createElement("div");
+    r.className = "price-row";
+    r.innerHTML = `<input class="input" data-q type="number" min="1" placeholder="Amount" aria-label="Amount" value="${qty}">
+      <input class="input" data-p type="number" min="0.01" step="0.01" placeholder="₱ Price" aria-label="Price in pesos" value="${price}">
+      <span class="pr-profit hint"></span>
+      <button type="button" class="btn btn-ghost btn-sm" aria-label="Remove this amount">✕</button>`;
+    r.querySelector("button").onclick = () => { r.remove(); if (!rows().length) addRow(); };
+    r.querySelectorAll("input").forEach((x) => x.addEventListener("input", paintProfit));
+    $("mf-rows").appendChild(r);
+    paintProfit();
+  };
   const lookup = debounce(async () => {
-    const id = Number($("mf-sid").value), per = Number($("mf-per").value) || 1000;
-    if (!id) { $("mf-info").textContent = ""; return; }
+    const id = Number($("mf-sid").value);
+    looked = null;
+    if (!id) { $("mf-info").textContent = ""; paintProfit(); return; }
     try {
-      const g = await call(`api/bot/lookup?id=${id}&per_qty=${per}`);
-      const price = Number($("mf-price").value);
-      $("mf-info").innerHTML = `SMMGen #${g.provider_service_id}: <strong>${esc(g.name)}</strong> · min ${num(g.min_qty)}, max ${num(g.max_qty)} · your cost ₱${g.cost_php.toFixed(2)} per ${num(per)}`
-        + (g.custom_comments ? ` · <span style="color:var(--bad)">needs typed comments: can't be sold in chat</span>`
-          : price ? ` · profit <strong style="color:${price < g.cost_php ? "var(--bad)" : "inherit"}">₱${(price - g.cost_php).toFixed(2)}</strong>${price < g.cost_php ? " (below cost!)" : ""}` : "");
+      const g = await call(`api/bot/lookup?id=${id}`);
+      looked = g;
+      $("mf-info").innerHTML = `SMMGen #${g.provider_service_id}: <strong>${esc(g.name)}</strong> · min ${num(g.min_qty)}, max ${num(g.max_qty)} · your cost ${peso2(g.cost_1k_php)} per 1K`
+        + (g.custom_comments ? " · customers type the comments; the amount is how many lines they send" : "");
     } catch (e) { $("mf-info").innerHTML = `<span style="color:var(--bad)">${esc(e.message)}</span>`; }
+    paintProfit();
   }, 400);
-  ["mf-sid", "mf-per", "mf-price"].forEach((id) => $(id).addEventListener("input", lookup));
+  $("mf-sid").addEventListener("input", lookup);
+  $("mf-addrow").onclick = () => addRow();
   const openForm = (m) => {
     editing = m ? m.id : null;
-    $("mf-name").value = m ? m.name : ""; $("mf-price").value = m ? m.price_php : ""; $("mf-per").value = m ? m.per_qty : 1000;
-    $("mf-sid").value = m ? m.provider_service_id : ""; $("mf-active").checked = m ? m.active : true;
+    $("mf-name").value = m ? m.name : ""; $("mf-sid").value = m ? m.provider_service_id : ""; $("mf-active").checked = m ? m.active : true;
+    $("mf-rows").innerHTML = "";
+    (m ? m.prices : [{ qty: "", price: "" }]).forEach((p) => addRow(p.qty, p.price));
     $("mf-save").textContent = m ? "Save changes" : "Save item";
     $("menu-form").classList.remove("hidden");
     $("mf-info").textContent = "";
+    looked = null;
     if (m) lookup();
     $("mf-name").focus();
   };
@@ -230,10 +261,11 @@ async function renderBot() {
   $("mf-cancel").onclick = () => { $("menu-form").classList.add("hidden"); editing = null; };
   $("menu-form").onsubmit = async (ev) => {
     ev.preventDefault();
-    const body = { name: $("mf-name").value.trim(), price_php: Number($("mf-price").value), per_qty: Number($("mf-per").value),
-      provider_service_id: Number($("mf-sid").value), active: $("mf-active").checked,
+    const prices = rows().filter((r) => r.qty || r.price).map(({ qty, price }) => ({ qty, price }));
+    const body = { name: $("mf-name").value.trim(), provider_service_id: Number($("mf-sid").value), prices, active: $("mf-active").checked,
       sort: editing ? (menuItems.find((x) => x.id === editing)?.sort || 0) : menuItems.length };
-    if (body.name.length < 2 || !(body.price_php > 0) || !(body.per_qty > 0) || !body.provider_service_id) { toast("Fill in all four fields", { bad: true }); return; }
+    if (body.name.length < 2 || !body.provider_service_id) { toast("Fill in the name and the SMMGen ID", { bad: true }); return; }
+    if (!prices.length || prices.some((p) => !(p.qty > 0) || !(p.price > 0))) { toast("Each price list row needs an amount and a price", { bad: true }); return; }
     $("mf-save").disabled = true;
     try {
       await call(editing ? `api/bot/menu/${editing}` : "api/bot/menu", { method: editing ? "PUT" : "POST", body });
