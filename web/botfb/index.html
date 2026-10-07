@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex, nofollow">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Messenger bot — SMM Shiro</title>
+<meta name="theme-color" content="#F4F4F4">
+<script>/* apply saved theme before first paint */(function(){try{var t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap">
+<link rel="icon" href="/favicon.ico?v=4" sizes="any">
+<link rel="icon" type="image/png" sizes="64x64" href="/assets/img/favicon.png?v=4">
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=4">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<!-- PIN -->
+<div class="theme-corner hidden" id="lock-theme"><button class="theme-btn" type="button" data-theme-toggle aria-label="Theme"></button></div>
+<main class="auth-page hidden" id="lock">
+  <form class="card auth-card" id="lock-form" novalidate>
+    <a class="brand brand-lg" href="https://smmshiro.com/" aria-label="SMM Shiro home" style="align-self:center"><img class="logo-ink" src="/assets/img/logo.png" alt="SMM Shiro" width="132" height="44"></a>
+    <div style="text-align:center"><span class="kicker">Messenger bot</span></div>
+    <p class="muted" id="lock-sub" style="margin:0;text-align:center">Enter your 6-digit PIN</p>
+    <div class="field" id="pin-field">
+      <label class="sr-only" for="lock-pin">PIN</label>
+      <input class="input vf-code" id="lock-pin" type="password" inputmode="numeric" autocomplete="off" maxlength="6" placeholder="••••••">
+    </div>
+    <div class="field hidden" id="pw-field">
+      <label for="lock-pw">SMM Shiro account password</label>
+      <input class="input" id="lock-pw" type="password" autocomplete="current-password" maxlength="128">
+    </div>
+    <div class="alert alert-bad hidden" id="lock-error" role="alert"></div>
+    <button class="btn btn-primary btn-lg btn-block" type="submit" id="lock-go">Open</button>
+  </form>
+</main>
+
+<!-- panel -->
+<div class="bf hidden" id="panel">
+  <header class="bf-head">
+    <a class="brand" href="https://smmshiro.com/" aria-label="SMM Shiro home"><img class="logo-ink" src="/assets/img/logo.png" alt="SMM Shiro" width="120" height="40"></a>
+    <h1>Messenger bot</h1>
+    <button class="theme-btn" type="button" data-theme-toggle aria-label="Theme"></button>
+    <button class="icon-btn" type="button" data-logout aria-label="Lock"></button>
+  </header>
+  <main id="view" aria-live="polite"></main>
+</div>
+<script type="module" src="/assets/botfb.js"></script>
+</body>
+</html>

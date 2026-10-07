@@ -659,7 +659,45 @@ async def main():
     r = await httpx.AsyncClient(base_url=API).post("/messenger/webhook", content=raw, headers=hdr)
     check("bot: unsigned webhook refused", r.status_code == 403, r.text)
 
-    st_b = (await ca.get("/admin/api/bot")).json()
+    # the bot's own panel: a 6-digit PIN; 3 wrong → only the owner's account password opens it
+    from app.security import hash_password
+    owner = (await sql("insert into users (email, password_hash, email_verified_at) values ('owner@example.com', :h, now()) returning id",
+                       {"h": hash_password("ownerpass123")}))[0]["id"]
+    bp = httpx.AsyncClient(base_url=API, headers=ip("10.9.9.9"))
+    r = await bp.get("/botfb/api/state")
+    check("bot panel: no PIN set → says so", r.json() == {"ready": False, "needs_password": False}, r.text)
+    await sql("insert into bot_panel (id, pin_hash, owner_user_id) values (1, :h, :o)", {"h": hash_password("246810"), "o": owner})
+    r = await bp.get("/botfb/api/bot")
+    check("bot panel: locked without the PIN", r.status_code == 401, r.text)
+    r = await ca.get("/botfb/api/bot")
+    check("bot panel: the admin session doesn't open it either", r.status_code == 401, r.text)
+    r = await bp.post("/botfb/api/login", json={"pin": "246810"})
+    check("bot panel: right PIN opens it", r.status_code == 200 and (await bp.get("/botfb/api/bot")).status_code == 200, r.text)
+    bx = httpx.AsyncClient(base_url=API, headers=ip("10.9.9.8"))
+    r1 = await bx.post("/botfb/api/login", json={"pin": "111111"})
+    r2 = await bx.post("/botfb/api/login", json={"pin": "222222"})
+    check("bot panel: wrong PIN counts down", r1.status_code == 401 and "2 tries left" in r1.text and "1 try left" in r2.text, (r1.text, r2.text))
+    r = await bx.post("/botfb/api/login", json={"pin": "246810"})
+    check("bot panel: a right PIN resets the count", r.status_code == 200 and (await sql("select pin_fails from bot_panel"))[0]["pin_fails"] == 0, r.text)
+    bx = httpx.AsyncClient(base_url=API, headers=ip("10.9.9.7"))
+    for pn in ("000001", "000002"):
+        await bx.post("/botfb/api/login", json={"pin": pn})
+    r = await bx.post("/botfb/api/login", json={"pin": "000003"})
+    check("bot panel: 3rd wrong PIN asks for the password", r.status_code == 423, r.text)
+    r = await bx.post("/botfb/api/login", json={"pin": "246810"})
+    st_l = (await bx.get("/botfb/api/state")).json()
+    check("bot panel: then even the right PIN is refused", r.status_code == 423 and st_l["needs_password"], r.text)
+    r = await bx.post("/botfb/api/unlock", json={"password": "password123"})
+    check("bot panel: someone else's password doesn't unlock", r.status_code == 401, r.text)
+    r = await bx.post("/botfb/api/unlock", json={"password": "ownerpass123"})
+    check("bot panel: the owner's account password unlocks and opens it", r.status_code == 200
+          and (await bx.get("/botfb/api/bot")).status_code == 200 and not (await bx.get("/botfb/api/state")).json()["needs_password"], r.text)
+    check("bot panel: the old session still works", (await bp.get("/botfb/api/bot")).status_code == 200)
+    await bx.post("/botfb/api/logout")
+    check("bot panel: lock (log out)", (await bx.get("/botfb/api/bot")).status_code == 401)
+    await bx.aclose()
+
+    st_b = (await bp.get("/botfb/api/bot")).json()
     check("bot: control panel shows setup and settings", st_b["setup"]["openrouter"] and st_b["setup"]["meta_token"]
           and st_b["settings"]["model"] == "meta-llama/llama-3.3-70b-instruct" and st_b["settings"]["enabled"] is False, st_b)
     await bm.post("/_llm_script", json={"answers": []})
@@ -667,24 +705,24 @@ async def main():
     await asyncio.sleep(1.5)
     check("bot: switched off → messages saved, no AI, no reply", r.status_code == 200 and (await bm.get("/_llm_calls")).json() == []
           and (await bm.get("/_sent", params={"psid": "p0"})).json() == [], r.text)
-    r = await ca.put("/admin/api/bot", json={"enabled": True, "notes": "Orders start within 1 hour."})
+    r = await bp.put("/botfb/api/bot", json={"enabled": True, "notes": "Orders start within 1 hour."})
     check("bot: switched on, notes saved", r.status_code == 200 and r.json()["enabled"] and r.json()["notes"].startswith("Orders"), r.text)
 
     # the bot menu: the owner's items, price per N, SMMGen service id
-    lk = (await ca.get("/admin/api/bot/lookup", params={"id": 2, "per_qty": 1000})).json()
+    lk = (await bp.get("/botfb/api/bot/lookup", params={"id": 2, "per_qty": 1000})).json()
     check("menu: looks up the SMMGen service and the cost", lk.get("name") and lk["min_qty"] == 100 and lk["cost_php"] > 0, lk)
-    r = await ca.post("/admin/api/bot/menu", json={"name": "Comments", "per_qty": 10, "price_php": 20, "provider_service_id": 3})
+    r = await bp.post("/botfb/api/bot/menu", json={"name": "Comments", "per_qty": 10, "price_php": 20, "provider_service_id": 3})
     check("menu: typed-comments services refused", r.status_code == 400, r.text)
-    r = await ca.post("/admin/api/bot/menu", json={"name": "Ghost", "per_qty": 1000, "price_php": 20, "provider_service_id": 99999})
+    r = await bp.post("/botfb/api/bot/menu", json={"name": "Ghost", "per_qty": 1000, "price_php": 20, "provider_service_id": 99999})
     check("menu: unknown SMMGen id refused", r.status_code == 400, r.text)
-    mi1 = (await ca.post("/admin/api/bot/menu", json={"name": "TikTok Followers", "per_qty": 1000, "price_php": 50, "provider_service_id": 1, "sort": 0})).json()["id"]
-    mi2 = (await ca.post("/admin/api/bot/menu", json={"name": "TikTok Followers HQ", "per_qty": 1000, "price_php": 120, "provider_service_id": 2, "sort": 1})).json()["id"]
-    mi3 = (await ca.post("/admin/api/bot/menu", json={"name": "Hidden thing", "per_qty": 100, "price_php": 5, "provider_service_id": 1, "active": False, "sort": 2})).json()["id"]
-    mn = (await ca.get("/admin/api/bot/menu")).json()
+    mi1 = (await bp.post("/botfb/api/bot/menu", json={"name": "TikTok Followers", "per_qty": 1000, "price_php": 50, "provider_service_id": 1, "sort": 0})).json()["id"]
+    mi2 = (await bp.post("/botfb/api/bot/menu", json={"name": "TikTok Followers HQ", "per_qty": 1000, "price_php": 120, "provider_service_id": 2, "sort": 1})).json()["id"]
+    mi3 = (await bp.post("/botfb/api/bot/menu", json={"name": "Hidden thing", "per_qty": 100, "price_php": 5, "provider_service_id": 1, "active": False, "sort": 2})).json()["id"]
+    mn = (await bp.get("/botfb/api/bot/menu")).json()
     check("menu: listed with SMMGen name, cost and limits", [m["id"] for m in mn] == [mi1, mi2, mi3] and mn[1]["smmgen"]["min"] == 100
           and mn[1]["smmgen"]["cost_php"] > 0 and mn[0]["price_php"] == 50, mn)
-    r = await ca.put(f"/admin/api/bot/menu/{mi3}", json={"name": "Hidden thing", "per_qty": 100, "price_php": 6, "provider_service_id": 1, "active": False, "sort": 2})
-    check("menu: edit an item", r.status_code == 200 and (await ca.get("/admin/api/bot/menu")).json()[2]["price_php"] == 6, r.text)
+    r = await bp.put(f"/botfb/api/bot/menu/{mi3}", json={"name": "Hidden thing", "per_qty": 100, "price_php": 6, "provider_service_id": 1, "active": False, "sort": 2})
+    check("menu: edit an item", r.status_code == 200 and (await bp.get("/botfb/api/bot/menu")).json()[2]["price_php"] == 6, r.text)
 
     # several quick messages → one AI call, one reply listing the real services
     await bm.post("/_llm_script", json={"answers": [
@@ -747,10 +785,22 @@ async def main():
     muted = (await sql("select id, muted_at from bot_chats where external_id = 'p2'"))[0]
     check("bot: spam → one warning, then silence", len(s1) == 1 and len(s2) == 1 and muted["muted_at"] is not None
           and len((await bm.get("/_llm_calls")).json()) == 2, (s2, muted))
-    r = await ca.post(f"/admin/api/bot/chats/{muted['id']}/unmute")
+    r = await bp.post(f"/botfb/api/bot/chats/{muted['id']}/unmute")
     check("bot: owner can unmute", r.status_code == 200 and (await sql("select muted_at from bot_chats where id = :i", {"i": muted["id"]}))[0]["muted_at"] is None, r.text)
-    chats_b = (await ca.get("/admin/api/bot")).json()
-    tr = (await ca.get(f"/admin/api/bot/chats/{chats_b['chats'][0]['id']}")).json()
+    r = await bp.post(f"/botfb/api/bot/chats/{muted['id']}/ai", json={"on": False})
+    await bm.post("/_llm_script", json={"answers": []})
+    n_sent = len((await bm.get("/_sent", params={"psid": "p2"})).json())
+    await fb_send("p2", "hello po, may tanong ako")
+    await asyncio.sleep(1.6)
+    ai_row = (await sql("select muted_at, mute_reason from bot_chats where id = :i", {"i": muted["id"]}))[0]
+    check("bot: AI off for one customer → message saved, no AI, no reply", r.status_code == 200 and ai_row["mute_reason"] == "owner"
+          and (await bm.get("/_llm_calls")).json() == [] and len((await bm.get("/_sent", params={"psid": "p2"})).json()) == n_sent
+          and (await sql("select 1 from bot_messages where chat_id = :i and text like 'hello po%'", {"i": muted["id"]})), ai_row)
+    r = await bp.post(f"/botfb/api/bot/chats/{muted['id']}/ai", json={"on": True})
+    check("bot: AI back on for that customer", r.status_code == 200
+          and (await sql("select muted_at from bot_chats where id = :i", {"i": muted["id"]}))[0]["muted_at"] is None, r.text)
+    chats_b = (await bp.get("/botfb/api/bot")).json()
+    tr = (await bp.get(f"/botfb/api/bot/chats/{chats_b['chats'][0]['id']}")).json()
     check("bot: conversations and transcripts in the control panel", len(chats_b["chats"]) >= 2 and tr["messages"]
           and chats_b["stats"]["orders"] >= 1 and chats_b["stats"]["cost_all"] > 0, chats_b["stats"])
 
@@ -761,25 +811,26 @@ async def main():
         {"intent": "order", "lang": "en", "quantity": 50},
         {"intent": "yes"}]})
     n_tp = len(await sql("select id from topups"))
-    r1 = (await ca.post("/admin/api/bot/test", json={"session": "tst1", "text": "how much tiktok followers"})).json()
-    r2 = (await ca.post("/admin/api/bot/test", json={"session": "tst1", "text": "500"})).json()
-    r2b = (await ca.post("/admin/api/bot/test", json={"session": "tst1", "text": "50 https://tiktok.com/@me"})).json()
-    r3 = (await ca.post("/admin/api/bot/test", json={"session": "tst1", "text": "yes"})).json()
+    r1 = (await bp.post("/botfb/api/bot/test", json={"session": "tst1", "text": "how much tiktok followers"})).json()
+    r2 = (await bp.post("/botfb/api/bot/test", json={"session": "tst1", "text": "500"})).json()
+    r2b = (await bp.post("/botfb/api/bot/test", json={"session": "tst1", "text": "50 https://tiktok.com/@me"})).json()
+    r3 = (await bp.post("/botfb/api/bot/test", json={"session": "tst1", "text": "yes"})).json()
     check("bot: test chat: price per N, then how many, then the link", "TikTok Followers: ₱50.00 per 1,000" in r1["replies"][0]["text"]
           and "How many? (100 to 50,000)" in r1["replies"][0]["text"] and "Send the link" in r2["replies"][0]["text"], (r1, r2))
     check("bot: below SMMGen's minimum → asks again", "100 to 50,000 only" in r2b["replies"][0]["text"], r2b)
     check("bot: test mode never pays or orders", "Test mode" not in r3["replies"][0]["text"] or len(await sql("select id from topups")) == n_tp, r3)
     await bm.post("/_llm_script", json={"answers": [{"intent": "order", "lang": "en", "item": 1, "quantity": 500}, {"intent": "yes"}]})
-    r4 = (await ca.post("/admin/api/bot/test", json={"session": "tst1", "text": "500 tiktok followers https://tiktok.com/@me"})).json()
-    r5 = (await ca.post("/admin/api/bot/test", json={"session": "tst1", "text": "yes"})).json()
+    r4 = (await bp.post("/botfb/api/bot/test", json={"session": "tst1", "text": "500 tiktok followers https://tiktok.com/@me"})).json()
+    r5 = (await bp.post("/botfb/api/bot/test", json={"session": "tst1", "text": "yes"})).json()
     check("bot: 500 at ₱50 per 1,000 = ₱25.00; YES in test mode makes no payment", "Total: ₱25.00" in r4["replies"][0]["text"]
           and "Test mode" in r5["replies"][0]["text"] and len(await sql("select id from topups")) == n_tp, (r4, r5))
-    await ca.post("/admin/api/bot/test/reset", json={"session": "tst1"})
+    await bp.post("/botfb/api/bot/test/reset", json={"session": "tst1"})
     check("bot: test chat reset", not await sql("select id from bot_chats where external_id = 'tst1'"))
-    r = await c.post("/admin/api/bot/test", json={"session": "tst2", "text": "hi"})
+    r = await c.post("/botfb/api/bot/test", json={"session": "tst2", "text": "hi"})
     check("bot: customers can't use the test chat", r.status_code == 401, r.text)
-    await ca.put("/admin/api/bot", json={"enabled": False})
+    await bp.put("/botfb/api/bot", json={"enabled": False})
     await bm.aclose()
+    await bp.aclose()
 
     await ca.post("/admin/api/logout")
     r = await ca.get("/admin/api/overview")

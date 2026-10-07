@@ -157,7 +157,7 @@ async def respond(db, chat: dict, texts: list[str], test: bool = False, before_i
     settings = await read_settings(db)
     items = await menu(db)
     joined = "\n".join(texts)
-    notes = f"\nShop notes (use for questions): {settings['notes']}" if settings["notes"] else ""
+    notes = f"\nOwner's instructions (follow them; also facts for questions): {settings['notes']}" if settings["notes"] else ""
     shown = {k: draft[k] for k in ("item_name", "quantity", "link") if draft.get(k)}
     system = SYSTEM.format(menu=menu_text(items) or "(empty)", notes=notes,
                            draft=json.dumps(shown, ensure_ascii=False) if shown else "none")

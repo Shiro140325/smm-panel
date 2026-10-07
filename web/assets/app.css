@@ -962,3 +962,23 @@ a.pill { text-decoration: none; }
   .menu-table td.menu-acts { padding-top: 6px; }
   .menu-table td.menu-acts .btn { margin-right: 6px; }
 }
+
+/* Messenger bot panel (botfb.smmshiro.com) */
+.bf { max-width: 1240px; margin: 0 auto; padding: 0 24px 40px; }
+.bf-head { display: flex; align-items: center; gap: 12px; padding: 18px 0 20px; }
+.bf-head h1 { flex: 1; margin: 0 0 0 8px; font-size: 26px; }
+.bf-head .icon-btn { color: var(--muted); }
+@media (max-width: 640px) {
+  .bf { padding: 0 16px 32px; }
+  .bf-head { padding: 12px 0 14px; gap: 6px; }
+  .bf-head .brand img { width: 96px; height: auto; }
+  .bf-head h1 { font-size: 18px; margin-left: 4px; white-space: nowrap; }
+}
+.ai-switch { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; flex: none; font-weight: 600; font-size: 13px; }
+.ai-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.ai-switch .track { width: 38px; height: 22px; border-radius: 999px; background: var(--field); position: relative; transition: background .15s; }
+.ai-switch .track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s; }
+.ai-switch input:checked + .track { background: var(--ink); }
+.ai-switch input:checked + .track::after { transform: translateX(16px); }
+.ai-switch input:focus-visible + .track { outline: 2px solid var(--ink); outline-offset: 2px; }
+.ai-switch input:disabled + .track { opacity: .5; }

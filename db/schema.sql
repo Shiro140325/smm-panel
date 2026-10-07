@@ -255,3 +255,12 @@ create table if not exists bot_menu (
   created_at          timestamptz not null default now()
 );
 alter table orders add column if not exists label text;   -- chat orders: the menu item's name
+
+-- Messenger bot panel (botfb.smmshiro.com): a 6-digit PIN; 3 wrong in a row → only the owner's account password opens it
+create table if not exists bot_panel (
+  id            integer primary key check (id = 1),
+  pin_hash      text,
+  pin_fails     integer not null default 0,
+  owner_user_id bigint references users(id),
+  session_epoch integer not null default 1     -- bump to log every device out
+);
