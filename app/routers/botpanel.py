@@ -222,10 +222,16 @@ class PriceIn(BaseModel):
     price: float = Field(gt=0, le=1_000_000)
 
 
+class OptionIn(BaseModel):
+    name: str = Field(min_length=1, max_length=40)
+    provider_service_id: int = Field(gt=0)
+
+
 class MenuItemIn(BaseModel):
     name: str = Field(min_length=2, max_length=60)
     provider_service_id: int = Field(gt=0)
     prices: list[PriceIn] = Field(min_length=1, max_length=20)
+    options: list[OptionIn] = Field(default_factory=list, max_length=12)   # e.g. reaction types, each its own service
     active: bool = True
     sort: int = 0
 
@@ -240,41 +246,52 @@ async def bot_menu(db: DB = Depends(get_db, scope="function")):
     out = []
     for r in rows:
         svc = await _provider_service(db, r["provider_service_id"])
-        out.append({**dict(r), "prices": [{"qty": q, "price": p} for q, p in pricing.clean(_prices(r["prices"]))],
+        opts = []
+        for o in _prices(r["options"]):
+            osvc = await _provider_service(db, int(o["sid"]))
+            opts.append({"name": o["name"], "provider_service_id": int(o["sid"]),
+                         "smmgen": {"name": osvc["name"], "cost_1k_php": _cost_1k(osvc)} if osvc else None})
+        out.append({**dict(r), "options": opts,
+                    "prices": [{"qty": q, "price": p} for q, p in pricing.clean(_prices(r["prices"]))],
                     "smmgen": {"name": svc["name"], "min": svc["min_qty"], "max": svc["max_qty"], "cost_1k_php": _cost_1k(svc),
                                "custom_comments": _is_custom(svc)} if svc else None})
     return out
 
 
-async def _check_menu_item(db, body: MenuItemIn) -> str:
-    svc = await _provider_service(db, body.provider_service_id)
-    if not svc:
-        raise HTTPException(400, f"SMMGen has no service #{body.provider_service_id}")
+async def _check_menu_item(db, body: MenuItemIn) -> tuple[str, str]:
     qtys = [p.qty for p in body.prices]
     if len(set(qtys)) != len(qtys):
         raise HTTPException(400, "Each amount can be in the price list once")
-    for q in qtys:
-        if not svc["min_qty"] <= q <= svc["max_qty"]:
-            raise HTTPException(400, f"{q:,} is outside what SMMGen #{body.provider_service_id} takes "
-                                     f"({svc['min_qty']:,} to {svc['max_qty']:,})")
-    return json.dumps(sorted([[p.qty, round(p.price, 2)] for p in body.prices]))
+    names = [o.name.strip().lower() for o in body.options]
+    if len(set(names)) != len(names):
+        raise HTTPException(400, "Each choice needs its own name")
+    for sid in [body.provider_service_id] + [o.provider_service_id for o in body.options]:
+        svc = await _provider_service(db, sid)
+        if not svc:
+            raise HTTPException(400, f"SMMGen has no service #{sid}")
+        for q in qtys:
+            if not svc["min_qty"] <= q <= svc["max_qty"]:
+                raise HTTPException(400, f"{q:,} is outside what SMMGen #{sid} takes ({svc['min_qty']:,} to {svc['max_qty']:,})")
+    return (json.dumps(sorted([[p.qty, round(p.price, 2)] for p in body.prices])),
+            json.dumps([{"name": o.name.strip(), "sid": o.provider_service_id} for o in body.options], ensure_ascii=False))
 
 
 @router.post("/bot/menu", dependencies=[Depends(require_bot)])
 async def bot_menu_add(body: MenuItemIn, db: DB = Depends(get_db, scope="function")):
-    prices = await _check_menu_item(db, body)
-    row = await db.fetch_one("""insert into bot_menu (name, prices, provider_service_id, active, sort)
-                                values (:n, CAST(:pr AS jsonb), :ps, :a, :s) returning id""",
-                             {"n": body.name.strip(), "pr": prices, "ps": body.provider_service_id, "a": body.active, "s": body.sort})
+    prices, options = await _check_menu_item(db, body)
+    row = await db.fetch_one("""insert into bot_menu (name, prices, options, provider_service_id, active, sort)
+                                values (:n, CAST(:pr AS jsonb), CAST(:op AS jsonb), :ps, :a, :s) returning id""",
+                             {"n": body.name.strip(), "pr": prices, "op": options, "ps": body.provider_service_id,
+                              "a": body.active, "s": body.sort})
     return {"id": row["id"]}
 
 
 @router.put("/bot/menu/{item_id}", dependencies=[Depends(require_bot)])
 async def bot_menu_edit(item_id: int, body: MenuItemIn, db: DB = Depends(get_db, scope="function")):
-    prices = await _check_menu_item(db, body)
-    row = await db.fetch_one("""update bot_menu set name = :n, prices = CAST(:pr AS jsonb), provider_service_id = :ps,
-                                       active = :a, sort = :s where id = :id returning id""",
-                             {"id": item_id, "n": body.name.strip(), "pr": prices, "ps": body.provider_service_id,
+    prices, options = await _check_menu_item(db, body)
+    row = await db.fetch_one("""update bot_menu set name = :n, prices = CAST(:pr AS jsonb), options = CAST(:op AS jsonb),
+                                       provider_service_id = :ps, active = :a, sort = :s where id = :id returning id""",
+                             {"id": item_id, "n": body.name.strip(), "pr": prices, "op": options, "ps": body.provider_service_id,
                               "a": body.active, "s": body.sort})
     if not row:
         raise HTTPException(404, "Menu item not found")

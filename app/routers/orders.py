@@ -120,17 +120,26 @@ async def place_order(user_id: int, service_id: int, link: str, quantity: int, c
 
 # ------------------------------------------------------------------ Messenger bot menu orders
 
-async def chat_item(db, item_id: int) -> dict | None:
-    """A bot menu item with its SMMGen service (min, max, type, cost), or None if it can't be ordered."""
-    return await db.fetch_one("""
-        select m.id, m.name, m.prices, m.provider_service_id, m.active,
-               p.id as provider_id, ps.name as provider_name, ps.min_qty, ps.max_qty, ps.rate, ps.type, p.currency
-          from bot_menu m
-          join providers p on p.active
-          join provider_services ps on ps.provider_id = p.id and ps.provider_service_id = m.provider_service_id
-         where m.id = :id
-         order by p.id limit 1
-    """, {"id": item_id})
+async def chat_item(db, item_id: int, option: int | None = None) -> dict | None:
+    """A bot menu item with its SMMGen service (min, max, type, cost), or None if it can't be ordered.
+    An item with choices (e.g. reaction types) sends each choice to its own SMMGen service."""
+    item = await db.fetch_one("select id, name, prices, options, provider_service_id, active from bot_menu where id = :id", {"id": item_id})
+    if not item:
+        return None
+    options = item["options"] if not isinstance(item["options"], str) else json.loads(item["options"])
+    sid, name = item["provider_service_id"], item["name"]
+    if options:
+        if option is None or not 0 <= option < len(options):
+            return None
+        sid, name = int(options[option]["sid"]), f"{item['name']} ({options[option]['name']})"
+    svc = await db.fetch_one("""
+        select p.id as provider_id, ps.name as provider_name, ps.min_qty, ps.max_qty, ps.rate, ps.type, p.currency
+          from providers p join provider_services ps on ps.provider_id = p.id and ps.provider_service_id = :sid
+         where p.active order by p.id limit 1
+    """, {"sid": sid})
+    if not svc:
+        return None
+    return {**dict(item), **dict(svc), "provider_service_id": sid, "name": name}
 
 
 def chat_price(item: dict, quantity: int) -> float:
@@ -140,11 +149,12 @@ def chat_price(item: dict, quantity: int) -> float:
     return pricing.price_for(prices, quantity)
 
 
-async def place_chat_order(user_id: int, item_id: int, link: str, quantity: int, comments_text: str | None = None) -> dict:
+async def place_chat_order(user_id: int, item_id: int, link: str, quantity: int, comments_text: str | None = None,
+                           option: int | None = None) -> dict:
     """Charge and place a Messenger order for a bot menu item: the owner's price, sent straight to the
     item's SMMGen service. Same queue, status sync, refunds and cancellations as website orders."""
     async with transaction() as db:
-        item = await chat_item(db, item_id)
+        item = await chat_item(db, item_id, option)
         if not item or not item["active"]:
             raise HTTPException(404, "That item isn't available right now")
         comments = None

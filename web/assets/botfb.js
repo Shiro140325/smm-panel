@@ -115,6 +115,10 @@ async function renderBot() {
           <div class="price-rows" id="mf-rows"></div>
           <button type="button" class="btn btn-ghost btn-sm" id="mf-addrow" style="align-self:flex-start">+ Add amount</button>
           <span class="hint">Other amounts are priced from the nearest amount here, and never cost more than a bigger one.</span></div>
+        <div class="field"><span class="label">Choices <span class="muted" style="font-weight:500">(optional)</span></span>
+          <div class="price-rows" id="mf-opts"></div>
+          <button type="button" class="btn btn-ghost btn-sm" id="mf-addopt" style="align-self:flex-start">+ Add choice</button>
+          <span class="hint">Like reaction types: the bot asks which one, and each goes to its own SMMGen service at the same prices.</span></div>
         <div class="bot-row"><label class="check" style="margin:0"><input type="checkbox" id="mf-active" checked> <span>On the menu</span></label>
           <span><button type="button" class="btn btn-ghost btn-sm" id="mf-cancel">Cancel</button>
           <button type="submit" class="btn btn-primary btn-sm" id="mf-save">Save item</button></span></div>
@@ -196,7 +200,8 @@ async function renderBot() {
         }).join("");
         return `<tr class="${m.active ? "" : "muted"}">
           <td class="muted menu-n">${i + 1}</td>
-          <td class="menu-name"><strong>${esc(m.name)}</strong>${m.active ? "" : ` <span class="badge badge-canceled">Off</span>`}${g && g.custom_comments ? ` <span class="badge badge-pending">Typed comments</span>` : ""}</td>
+          <td class="menu-name"><strong>${esc(m.name)}</strong>${m.active ? "" : ` <span class="badge badge-canceled">Off</span>`}${g && g.custom_comments ? ` <span class="badge badge-pending">Typed comments</span>` : ""}
+            ${m.options.length ? `<div class="hint menu-opts">${m.options.map((o) => `${esc(o.name)} <span class="mono">#${o.provider_service_id}</span>${o.smmgen ? "" : ` <span style="color:var(--bad)">not found</span>`}`).join(" · ")}</div>` : ""}</td>
           <td class="menu-prices">${list}</td>
           <td data-k="SMMGen"><span class="mono">#${m.provider_service_id}</span><div class="hint" style="margin:2px 0 0;max-width:300px">${g ? `${esc(g.name)} · ${num(g.min)}–${num(g.max)} · cost ${peso2(g.cost_1k_php)}/1K` : `<span style="color:var(--bad)">Not found at SMMGen</span>`}</div></td>
           <td class="menu-acts" style="white-space:nowrap"><button type="button" class="btn btn-ghost btn-sm" data-medit="${m.id}">Edit</button>
@@ -231,6 +236,19 @@ async function renderBot() {
     $("mf-rows").appendChild(r);
     paintProfit();
   };
+  const optRows = () => [...$("mf-opts").querySelectorAll(".opt-row")].map((r) => ({
+    name: r.querySelector("[data-on]").value.trim(), provider_service_id: Number(r.querySelector("[data-os]").value) }));
+  const addOpt = (name = "", sid = "") => {
+    const r = document.createElement("div");
+    r.className = "price-row opt-row";
+    r.innerHTML = `<input class="input" data-on maxlength="40" placeholder="Name, e.g. Love ❤️" aria-label="Choice name" value="${esc(name)}">
+      <input class="input" data-os type="number" min="1" placeholder="SMMGen ID" aria-label="SMMGen service ID" value="${sid}">
+      <span class="hint"></span>
+      <button type="button" class="btn btn-ghost btn-sm" aria-label="Remove this choice">✕</button>`;
+    r.querySelector("button").onclick = () => r.remove();
+    $("mf-opts").appendChild(r);
+  };
+  $("mf-addopt").onclick = () => addOpt();
   const lookup = debounce(async () => {
     const id = Number($("mf-sid").value);
     looked = null;
@@ -250,6 +268,8 @@ async function renderBot() {
     $("mf-name").value = m ? m.name : ""; $("mf-sid").value = m ? m.provider_service_id : ""; $("mf-active").checked = m ? m.active : true;
     $("mf-rows").innerHTML = "";
     (m ? m.prices : [{ qty: "", price: "" }]).forEach((p) => addRow(p.qty, p.price));
+    $("mf-opts").innerHTML = "";
+    (m ? m.options : []).forEach((o) => addOpt(o.name, o.provider_service_id));
     $("mf-save").textContent = m ? "Save changes" : "Save item";
     $("menu-form").classList.remove("hidden");
     $("mf-info").textContent = "";
@@ -262,7 +282,9 @@ async function renderBot() {
   $("menu-form").onsubmit = async (ev) => {
     ev.preventDefault();
     const prices = rows().filter((r) => r.qty || r.price).map(({ qty, price }) => ({ qty, price }));
-    const body = { name: $("mf-name").value.trim(), provider_service_id: Number($("mf-sid").value), prices, active: $("mf-active").checked,
+    const options = optRows().filter((o) => o.name || o.provider_service_id);
+    if (options.some((o) => !o.name || !o.provider_service_id)) { toast("Each choice needs a name and an SMMGen ID", { bad: true }); return; }
+    const body = { name: $("mf-name").value.trim(), provider_service_id: Number($("mf-sid").value), prices, options, active: $("mf-active").checked,
       sort: editing ? (menuItems.find((x) => x.id === editing)?.sort || 0) : menuItems.length };
     if (body.name.length < 2 || !body.provider_service_id) { toast("Fill in the name and the SMMGen ID", { bad: true }); return; }
     if (!prices.length || prices.some((p) => !(p.qty > 0) || !(p.price > 0))) { toast("Each price list row needs an amount and a price", { bad: true }); return; }

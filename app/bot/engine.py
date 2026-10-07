@@ -38,6 +38,7 @@ T = {
     "ask_qty": ("How many? ({mn} to {mx})", "Ilan? ({mn} hanggang {mx})"),
     "bad_qty": ("{name}: {mn} to {mx} only. How many?", "{name}: {mn} hanggang {mx} lang. Ilan?"),
     "price": ("{name}: {list}.", "{name}: {list}."),
+    "ask_option": ("Which one?\n{lines}\nReply with the number.", "Alin dito?\n{lines}\nReply ng number."),
     "ask_comments": ("Now send your comments, one per line. Each line is 1 comment.",
                      "Send mo na yung comments, isa kada line. Bawat line = 1 comment."),
     "bad_comments": ("{name}: {mn} to {mx} comments only. Send them again, one per line.",
@@ -104,7 +105,7 @@ async def save_settings(db, model: str | None = None, notes: str | None = None, 
 async def menu(db) -> list[dict]:
     """The bot menu: active items with a price list whose SMMGen service exists."""
     rows = await db.fetch_all("""
-        select m.id, m.name, m.prices, ps.min_qty as min, ps.max_qty as max,
+        select m.id, m.name, m.prices, m.options, ps.min_qty as min, ps.max_qty as max,
                lower(coalesce(ps.type, '')) = 'custom comments' as custom
           from bot_menu m
           join provider_services ps on ps.provider_service_id = m.provider_service_id
@@ -117,8 +118,9 @@ async def menu(db) -> list[dict]:
         if r["id"] not in seen:
             seen.add(r["id"])
             prices = r["prices"] if not isinstance(r["prices"], str) else json.loads(r["prices"])
+            options = r["options"] if not isinstance(r["options"], str) else json.loads(r["options"] or "[]")
             if pricing.clean(prices):
-                out.append({**dict(r), "prices": prices})
+                out.append({**dict(r), "prices": prices, "options": options or []})
     return out
 
 
@@ -133,6 +135,43 @@ def menu_lines(items: list[dict], lang: str) -> str:
 
 def item_total(item: dict, qty: int) -> float:
     return pricing.price_for(item["prices"], qty)
+
+
+# extra words customers use for common choices (reactions); the owner's choice names always count too
+OPTION_WORDS = {
+    "like": ["like", "likes", "👍", "thumbs"], "love": ["love", "heart", "hearts", "puso", "❤", "♥", "💖", "😍"],
+    "care": ["care", "yakap", "hug", "🤗"], "haha": ["haha", "tawa", "laugh", "😂", "😆", "🤣"],
+    "wow": ["wow", "😮", "😲"], "sad": ["sad", "malungkot", "iyak", "cry", "😢", "😭"],
+    "angry": ["angry", "galit", "😡", "😠"],
+}
+
+
+def match_option(item: dict, text: str) -> int | None:
+    """Which of the item's choices the text names: its number (on its own) or a word/emoji for it."""
+    opts = item.get("options") or []
+    if not opts or not text:
+        return None
+    low = text.strip().lower()
+    if low.isdigit():
+        n = int(low)
+        return n - 1 if 1 <= n <= len(opts) else None
+    words = set(re.findall(r"[\w']+", low))
+    hits = []
+    for i, o in enumerate(opts):
+        keys = {w for w in re.findall(r"[\w']+", o["name"].lower()) if len(w) > 2}
+        for k in list(keys):
+            keys.update(OPTION_WORDS.get(k, []))
+        keys.update(ch for ch in o["name"] if ord(ch) > 0x2000 and not ch.isspace())
+        if any((k in words) if k.isalnum() else (k in low) for k in keys):
+            hits.append(i)
+    return hits[0] if len(hits) == 1 else None
+
+
+def item_label(item: dict, draft: dict) -> str:
+    opt = draft.get("option")
+    if item.get("options") and opt is not None and 0 <= opt < len(item["options"]):
+        return f"{item['name']} ({item['options'][opt]['name']})"
+    return item["name"]
 
 
 CANCEL_WORDS = {"cancel", "no", "stop", "wag na", "huwag na", "hindi", "ayoko", "cancel na"}
@@ -154,10 +193,11 @@ def _comments_turn(items: list[dict], draft: dict, text: str, lang: str) -> str:
 # ------------------------------------------------------------------ the turn
 
 SYSTEM = """You read Messenger messages sent to SMM Shiro, a Philippine shop selling social media followers, likes, views and more.
-Answer ONLY with JSON: {{"intent":"","lang":"en","item":0,"quantity":0,"order_id":0,"reply":""}}
+Answer ONLY with JSON: {{"intent":"","lang":"en","item":0,"option":"","quantity":0,"order_id":0,"reply":""}}
 intent: order (wants to buy) | price (asks how much) | menu (asks what's available) | choose (picks an item number) | yes (agrees/confirms) | no (declines or drops the current order) | status (asks about their orders) | cancel_order (wants a placed order canceled; set order_id) | balance (asks their credit) | question | greeting | spam (nonsense, random or unrelated messages).
 item: the number of the matching menu item below, or 0 if unclear:
 {menu}
+option: the kind they named if any (e.g. a reaction: like, love, care, haha, wow, sad, angry), else "".
 quantity: a number (1k=1000). lang: "tl" if Tagalog/Taglish, else "en".
 reply: only for question/greeting, one short friendly sentence in the customer's language (Taglish if they use it), never a price or a made-up fact; otherwise "".{notes}
 Current draft: {draft}"""
@@ -184,6 +224,15 @@ async def respond(db, chat: dict, texts: list[str], test: bool = False, before_i
             return await _save(db, chat, st, {}, [{"text": t("cleared", lang)}], {"ai": {"intent": "no"}})
         reply = _comments_turn(items, draft, joined, lang)
         return await _save(db, chat, st, draft, [{"text": reply}], {"ai": {"intent": "comments"}})
+    if draft.get("step") == "option":   # "2", "love", "❤️": no AI needed
+        item = next((m for m in items if m["id"] == draft.get("item_id")), None)
+        pick = match_option(item, joined) if item else None
+        if pick is not None:
+            draft["option"] = pick
+            m = LINK_RE.search(joined)
+            if m:
+                draft["link"] = m.group(0).rstrip(".,)")
+            return await _save(db, chat, st, draft, [{"text": _next_step(items, draft, lang)}], {"ai": {"intent": "option"}})
     notes = f"\nOwner's instructions (follow them; also facts for questions): {settings['notes']}" if settings["notes"] else ""
     shown = {k: draft[k] for k in ("item_name", "quantity", "link") if draft.get(k)}
     system = SYSTEM.format(menu=menu_text(items) or "(empty)", notes=notes,
@@ -254,6 +303,12 @@ def _merge(items: list[dict], draft: dict, ai: dict, text: str) -> None:
     if 1 <= pick <= len(items) and items[pick - 1]["id"] != draft.get("item_id"):
         draft.update(item_id=items[pick - 1]["id"], item_name=items[pick - 1]["name"])
         draft.pop("comments", None)
+        draft.pop("option", None)
+    item = next((m for m in items if m["id"] == draft.get("item_id")), None)
+    if item and item.get("options") and ai.get("option"):
+        o = match_option(item, str(ai["option"]))
+        if o is not None:
+            draft["option"] = o
     try:
         q = int(float(ai.get("quantity") or 0))
     except (TypeError, ValueError):
@@ -279,6 +334,10 @@ def _next_step(items: list[dict], draft: dict, lang: str, price_only: bool = Fal
         return t("menu", lang, lines=menu_lines(items, lang))
     draft["step"] = "collect"
     head = t("price", lang, name=item["name"], list=pricing.price_list_text(item["prices"])) + "\n" if price_only else ""
+    if item.get("options") and draft.get("option") is None:
+        draft["step"] = "option"
+        return head + t("ask_option", lang, lines="\n".join(f"{i}) {o['name']}" for i, o in enumerate(item["options"], 1)))
+    name = item_label(item, draft)
     if item["custom"]:   # typed comments: the link, then the comments; how many = how many lines
         draft.pop("quantity", None)
         if not draft.get("link"):
@@ -289,20 +348,20 @@ def _next_step(items: list[dict], draft: dict, lang: str, price_only: bool = Fal
         qty = len(draft["comments"].splitlines())
         total = item_total(item, qty)
         draft.update(step="confirm", total=total, quantity=qty)
-        return t("summary", lang, q=f"{qty:,}", name=item["name"], link=draft["link"], total=money(total))
+        return t("summary", lang, q=f"{qty:,}", name=name, link=draft["link"], total=money(total))
     qty = draft.get("quantity")
     if not qty:
         return head + t("ask_qty", lang, mn=f"{item['min']:,}", mx=f"{item['max']:,}")
     if not item["min"] <= qty <= item["max"]:
         draft.pop("quantity", None)
-        return t("bad_qty", lang, name=item["name"], mn=f"{item['min']:,}", mx=f"{item['max']:,}")
+        return t("bad_qty", lang, name=name, mn=f"{item['min']:,}", mx=f"{item['max']:,}")
     total = item_total(item, qty)
     if not draft.get("link"):
         if price_only:
-            return f"{qty:,} {item['name']}: ₱{money(total)}. " + t("ask_link", lang)
+            return f"{qty:,} {name}: ₱{money(total)}. " + t("ask_link", lang)
         return t("ask_link", lang)
     draft.update(step="confirm", total=total)
-    return t("summary", lang, q=f"{qty:,}", name=item["name"], link=draft["link"], total=money(total))
+    return t("summary", lang, q=f"{qty:,}", name=name, link=draft["link"], total=money(total))
 
 
 async def _credit(db, chat: dict) -> float:
@@ -343,6 +402,8 @@ async def _checkout(db, chat: dict, draft: dict, lang: str, test: bool) -> list[
     order = {"item_id": draft["item_id"], "link": draft["link"], "quantity": draft["quantity"]}
     if draft.get("comments"):
         order["comments"] = draft["comments"]
+    if draft.get("option") is not None:
+        order["option"] = draft["option"]
     if test:
         draft.clear()
         return [{"text": t("test_pay", lang, amt=money(total))}]
@@ -373,7 +434,8 @@ async def _place(user_id: int, order: dict) -> dict:
     from fastapi import HTTPException
     from app.routers.orders import place_chat_order
     try:
-        return await place_chat_order(user_id, order["item_id"], order["link"], order["quantity"], order.get("comments"))
+        return await place_chat_order(user_id, order["item_id"], order["link"], order["quantity"], order.get("comments"),
+                                      order.get("option"))
     except HTTPException as e:
         return {"error": str(e.detail)}
 

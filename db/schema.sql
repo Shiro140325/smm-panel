@@ -258,6 +258,8 @@ alter table orders add column if not exists label text;   -- chat orders: the me
 alter table bot_menu add column if not exists prices jsonb not null default '[]';
 alter table bot_menu drop column if exists per_qty;
 alter table bot_menu drop column if exists price_php;
+-- choices within an item (e.g. reaction types), each sent to its own SMMGen service: [{"name": "Love ❤️", "sid": 17348}, ...]
+alter table bot_menu add column if not exists options jsonb not null default '[]';
 
 -- Messenger bot panel (botfb.smmshiro.com): a 6-digit PIN; 3 wrong in a row → only the owner's account password opens it
 create table if not exists bot_panel (

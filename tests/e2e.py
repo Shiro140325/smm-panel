@@ -731,8 +731,19 @@ async def main():
     mi2 = (await bp.post("/botfb/api/bot/menu", json={"name": "TikTok Followers HQ", "prices": [{"qty": 1000, "price": 120}], "provider_service_id": 2, "sort": 1})).json()["id"]
     mi3 = (await bp.post("/botfb/api/bot/menu", json={"name": "Hidden thing", "prices": [{"qty": 100, "price": 5}], "provider_service_id": 1, "active": False, "sort": 2})).json()["id"]
     mi4 = (await bp.post("/botfb/api/bot/menu", json={"name": "Custom Comments", "prices": [{"qty": 1, "price": 2}], "provider_service_id": 3, "sort": 3})).json()["id"]
+    r = await bp.post("/botfb/api/bot/menu", json={"name": "Reacts", "prices": [{"qty": 100, "price": 5}], "provider_service_id": 1,
+                                                   "options": [{"name": "Like", "provider_service_id": 1}, {"name": "Love", "provider_service_id": 99999}]})
+    check("menu: a choice with an unknown SMMGen id refused", r.status_code == 400 and "99999" in r.text, r.text)
+    r = await bp.post("/botfb/api/bot/menu", json={"name": "Reacts", "prices": [{"qty": 100, "price": 5}], "provider_service_id": 1,
+                                                   "options": [{"name": "Like", "provider_service_id": 1}, {"name": "like", "provider_service_id": 2}]})
+    check("menu: two choices with the same name refused", r.status_code == 400, r.text)
+    mi5 = (await bp.post("/botfb/api/bot/menu", json={"name": "Reacts", "prices": [{"qty": 100, "price": 5}, {"qty": 1000, "price": 40}],
+                                                      "provider_service_id": 1, "sort": 4,
+                                                      "options": [{"name": "Like 👍", "provider_service_id": 1}, {"name": "Love ❤️", "provider_service_id": 2}]})).json()["id"]
     mn = (await bp.get("/botfb/api/bot/menu")).json()
-    check("menu: listed with price list (sorted), SMMGen name, cost and limits", [m["id"] for m in mn] == [mi1, mi2, mi3, mi4]
+    check("menu: choices listed with their SMMGen services", mn[4]["options"][1]["provider_service_id"] == 2
+          and mn[4]["options"][1]["name"] == "Love ❤️" and mn[4]["options"][1]["smmgen"]["name"], mn[4])
+    check("menu: listed with price list (sorted), SMMGen name, cost and limits", [m["id"] for m in mn] == [mi1, mi2, mi3, mi4, mi5]
           and mn[1]["smmgen"]["min"] == 100 and mn[1]["smmgen"]["cost_1k_php"] > 0
           and [p["qty"] for p in mn[0]["prices"]] == [100, 500, 1000] and mn[3]["smmgen"]["custom_comments"], mn)
     r = await bp.put(f"/botfb/api/bot/menu/{mi3}", json={"name": "Hidden thing", "prices": [{"qty": 100, "price": 6}], "provider_service_id": 1, "active": False, "sort": 2})
@@ -855,8 +866,39 @@ async def main():
           and cm2["draft"].get("comments") == "Ganda!\nWow ang galing\nSana all", cm2)
     cm3 = (await bp.post("/botfb/api/bot/test", json={"session": "tst1", "text": "yes"})).json()
     check("bot: comments order YES in test mode", "Test mode" in cm3["replies"][0]["text"] and "₱6.00" in cm3["replies"][0]["text"], cm3)
+    # choices (reaction types): the bot asks which; "puso" / "2" / "❤️" all pick Love, no AI needed
+    from app.bot.engine import match_option
+    rx = {"options": [{"name": "Like 👍"}, {"name": "Love ❤️"}, {"name": "Haha 😂"}, {"name": "Angry 😡"}]}
+    check("bot: choice words, numbers and emoji", [match_option(rx, x) for x in ("2", "puso", "❤️", "galit", "HAHA po", "5", "love or like")]
+          == [1, 1, 1, 3, 2, None, None])
+    await bp.post("/botfb/api/bot/test/reset", json={"session": "tst1"})
+    await bm.post("/_llm_script", json={"answers": [{"intent": "order", "lang": "en", "item": 4, "quantity": 1000, "option": ""}]})
+    rc1 = (await bp.post("/botfb/api/bot/test", json={"session": "tst1", "text": "1k reacts https://facebook.com/p/1"})).json()
+    n_calls = len((await bm.get("/_llm_calls")).json())
+    rc2 = (await bp.post("/botfb/api/bot/test", json={"session": "tst1", "text": "puso"})).json()
+    check("bot: an item with choices asks which one", "Which one?\n1) Like 👍\n2) Love ❤️" in rc1["replies"][0]["text"], rc1)
+    check("bot: the choice by word, no AI call, in the summary", "1,000 Reacts (Love ❤️)" in rc2["replies"][0]["text"]
+          and "Total: ₱40.00" in rc2["replies"][0]["text"] and len((await bm.get("/_llm_calls")).json()) == n_calls, rc2)
+    await bp.post("/botfb/api/bot/test/reset", json={"session": "tst1"})
+    await bm.post("/_llm_script", json={"answers": [{"intent": "order", "lang": "en", "item": 4, "quantity": 500, "option": "heart"}]})
+    rc3 = (await bp.post("/botfb/api/bot/test", json={"session": "tst1", "text": "500 heart reacts https://facebook.com/p/1"})).json()
+    check("bot: a choice named in the first message isn't asked again", "500 Reacts (Love ❤️)" in rc3["replies"][0]["text"]
+          and "Total: ₱22.00" in rc3["replies"][0]["text"], rc3)
+    await bp.post("/botfb/api/bot/test/reset", json={"session": "tst1"})
+
     from app.routers.orders import place_chat_order
-    await sql("insert into ledger (user_id, delta, reason, ref) values (:u, 10, 'adjustment', 'test')", {"u": owner})
+    await sql("insert into ledger (user_id, delta, reason, ref) values (:u, 50, 'adjustment', 'test')", {"u": owner})
+    ro = await place_chat_order(owner, mi5, "https://facebook.com/p/1", 1000, None, 1)
+    rrow = (await sql("""select o.price_php, o.label, s.provider_service_id from orders o join services s on s.id = o.service_id
+                          where o.id = :i""", {"i": ro["id"]}))[0]
+    check("bot: a choice goes to its own SMMGen service", rrow["provider_service_id"] == 2 and rrow["label"] == "Reacts (Love ❤️)"
+          and float(rrow["price_php"]) == 40, rrow)
+    try:
+        await place_chat_order(owner, mi5, "https://facebook.com/p/1", 1000)
+        nochoice = None
+    except Exception as e:
+        nochoice = getattr(e, "status_code", None)
+    check("bot: an item with choices can't be ordered without one", nochoice == 404, nochoice)
     co = await place_chat_order(owner, mi4, "https://tiktok.com/@me/video/1", 0, "First one\n\nSecond one")
     corow = (await sql("select quantity, price_php, comments, label from orders where id = :i", {"i": co["id"]}))[0]
     check("bot: a comments order sends the lines to SMMGen, priced per comment", corow["quantity"] == 2 and float(corow["price_php"]) == 4

@@ -996,3 +996,6 @@ a.pill { text-decoration: none; }
   .price-row .pr-profit { grid-column: 1 / -1; grid-row: 2; margin-top: -4px; }
   .menu-table td.menu-prices { padding: 4px 0; }
 }
+.opt-row { grid-template-columns: 1fr 130px 0 auto; }
+.menu-opts { margin: 4px 0 0; max-width: 340px; line-height: 1.6; }
+@media (max-width: 640px) { .opt-row { grid-template-columns: 1fr 110px auto; } .opt-row .hint { display: none; } }
