@@ -5,7 +5,7 @@ FastAPI backend for an SMM reseller panel: wallet top-ups via PayMongo (QR Ph: G
 ## Stack
 
 - FastAPI + SQLAlchemy Core (async) + asyncpg
-- Postgres (Neon)
+- Postgres (Supabase)
 - PayMongo Checkout Sessions + webhook
 - Upstream providers: any standard SMM API v2 panel (SMMGen, SMMFollowom, …)
 
@@ -15,7 +15,7 @@ FastAPI backend for an SMM reseller panel: wallet top-ups via PayMongo (QR Ph: G
 app/
   main.py               FastAPI app + in-process sync loop (lifespan)
   config.py             env settings
-  db.py                 engine, transaction helpers (handles Neon sslmode/pooler)
+  db.py                 engine, transaction helpers (handles sslmode/pooler params)
   security.py           argon2 passwords, JWT session cookie, balance
   catalog.py            full provider catalog → services (cleans names, skips reviews/votes/traffic)
   pricing.py            provider rate → PHP price with markup (tiered when markup_pct is null)
@@ -71,7 +71,7 @@ scripts/
 
 | Var | Notes |
 |---|---|
-| `DATABASE_URL` | Neon connection string, as copied (`?sslmode=require` is handled) |
+| `DATABASE_URL` | Supabase pooler, **session mode (port 5432)**, as `smm_app.<project-ref>` (`?sslmode=require` is handled). Transaction mode (6543) breaks asyncpg's prepared statements |
 | `BASE_URL` | this service's public URL |
 | `FRONTEND_ORIGIN` | frontend URL (CORS + PayMongo redirect) |
 | `JWT_SECRET` | long random string |
@@ -85,7 +85,7 @@ scripts/
 
 ## First deploy
 
-1. Apply the schema to Neon:
+1. Apply the schema (as `smm_app`, so it lands in the `smm` schema):
    ```
    psql "$DATABASE_URL" -f db/schema.sql
    ```

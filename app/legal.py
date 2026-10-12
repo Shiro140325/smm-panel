@@ -6,7 +6,7 @@ top-up expiry). Change the code, change these too.
 from app.config import get_settings
 from app.payments import TOPUP_TTL_MINUTES
 
-UPDATED = "September 26, 2026"
+UPDATED = "October 12, 2026"
 CONTACT = '<!--email_off--><a href="mailto:support@smmshiro.com">support@smmshiro.com</a><!--/email_off-->'
 
 
@@ -153,7 +153,7 @@ def privacy() -> str:
   <li><strong>PayMongo</strong> (Philippines): payment processing.</li>
   <li><strong>Our SMM suppliers:</strong> the link, quantity and comments of each order, which they need to deliver it. Never your email or name.</li>
   <li><strong>Render</strong> (United States): application hosting.</li>
-  <li><strong>Neon</strong> (United States): database hosting.</li>
+  <li><strong>Supabase</strong> (United States; data stored in Singapore): database hosting.</li>
   <li><strong>Cloudflare</strong> (global): domain, security and content delivery.</li>
   <li><strong>Google Fonts:</strong> your browser loads our fonts from Google, which sees your IP address.</li>
 </ul>

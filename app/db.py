@@ -9,14 +9,14 @@ from app.config import get_settings
 
 
 def _asyncpg_url(url: str) -> tuple[str, dict]:
-    """Neon gives postgresql://...?sslmode=require&channel_binding=require.
+    """Connection strings carry libpq params (?sslmode=require, Neon's &channel_binding=require).
     asyncpg doesn't accept those query params, so strip them and pass ssl via connect_args."""
     parts = urlsplit(url)
     query = dict(parse_qsl(parts.query))
     sslmode = query.pop("sslmode", None)
     query.pop("channel_binding", None)
     scheme = "postgresql+asyncpg"
-    connect_args: dict = {"statement_cache_size": 0}   # safe with Neon's pooled (pgbouncer) endpoint
+    connect_args: dict = {"statement_cache_size": 0}   # no statement cache on asyncpg's side
     if sslmode in ("require", "verify-ca", "verify-full"):
         connect_args["ssl"] = "require"
     query["prepared_statement_cache_size"] = "0"
