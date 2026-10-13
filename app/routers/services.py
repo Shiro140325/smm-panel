@@ -20,10 +20,17 @@ log = logging.getLogger("services")
 # so the finished response is cached: JSON bytes, their gzip, and an ETag, per query shape.
 # After _CACHE_TTL a request still gets the cached copy while a fresh one is built in the
 # background; only a missing (or, with TTL 0 in tests, any) cache entry is built inline.
+# The rows behind every list are fetched once and kept with a fingerprint of the catalog (a 32-byte
+# md5 the database computes), so a rebuild only downloads the catalog again when something in it
+# changed. Pulling it on every rebuild was most of the database's egress.
 _CACHE_TTL = float(os.environ.get("SERVICES_CACHE_SECONDS", "60"))
 _cache: dict[tuple, tuple] = {}
 _built: dict[tuple, tuple[float, bytes, bytes, str]] = {}
 _refreshing: set[tuple] = set()
+_catalog: tuple[str, list[dict]] | None = None   # (fingerprint, SERVICE_SELECT rows)
+_catalog_checked = 0.0                            # when the fingerprint was last compared
+CATALOG_RECHECK = 5   # seconds: lists rebuilt together (warm_cache) share one fingerprint check
+CATALOG_FINGERPRINT = f"select md5(coalesce(string_agg(x::text, ',' order by x.id), '')) from ({SERVICE_SELECT}) x"
 
 
 def _row(r) -> dict:
@@ -50,16 +57,31 @@ def _row(r) -> dict:
     }
 
 
+async def _catalog_rows(db: DB) -> list[dict]:
+    """Every orderable service (SERVICE_SELECT), downloaded only when its fingerprint changed."""
+    global _catalog, _catalog_checked
+    if _catalog is not None and _CACHE_TTL > 0 and time.monotonic() - _catalog_checked < CATALOG_RECHECK:
+        return _catalog[1]
+    fingerprint = await db.fetch_val(CATALOG_FINGERPRINT)
+    if _catalog is None or _catalog[0] != fingerprint:
+        _catalog = (fingerprint, await db.fetch_all(SERVICE_SELECT))
+    _catalog_checked = time.monotonic()
+    return _catalog[1]
+
+
+def forget_catalog():
+    """Drop every cached list, so the next request rebuilds from the database (after an admin edit)."""
+    global _catalog
+    _catalog = None
+    _built.clear()
+    _cache.clear()
+
+
 async def _rows(db: DB, platform: str | None, featured: bool) -> list[dict]:
-    sql = SERVICE_SELECT
-    params = {}
-    if platform:
-        sql += " and s.platform = :pf"
-        params["pf"] = platform
-    if featured:
-        sql += " and not s.auto"
     rows = []
-    for r in await db.fetch_all(sql, params):
+    for r in await _catalog_rows(db):
+        if (platform and r["platform"] != platform) or (featured and r["auto"]):
+            continue
         item = _row(r)
         # hand-picked services first (curated order), then the rest cheapest-first per category
         rank = (r["platform"], 0, r["sort"], r["id"]) if not r["auto"] else \
@@ -101,7 +123,12 @@ async def _build(key: tuple, db: DB | None = None) -> tuple[float, bytes, bytes,
     else:
         rows = await _produce(db, key)
     body = json.dumps(rows, separators=(",", ":"), ensure_ascii=False, default=str).encode()
-    entry = (time.monotonic(), body, gzip.compress(body, 9), '"' + hashlib.md5(body).hexdigest() + '"')
+    etag = '"' + hashlib.md5(body).hexdigest() + '"'
+    old = _built.get(key)
+    if old and old[3] == etag:   # unchanged: keep the gzip instead of compressing it again
+        entry = (time.monotonic(), old[1], old[2], etag)
+    else:
+        entry = (time.monotonic(), body, gzip.compress(body, 9), etag)
     _built[key] = entry
     return entry
 
@@ -185,6 +212,6 @@ async def count_services(db: DB = Depends(get_db, scope="function")):
     hit = _cache.get(("count",))
     if hit and time.monotonic() - hit[0] < _CACHE_TTL:
         return hit[1]
-    out = {"total": await db.fetch_val(f"select count(*) from ({SERVICE_SELECT}) x")}
+    out = {"total": len(await _catalog_rows(db))}
     _cache[("count",)] = (time.monotonic(), out)
     return out

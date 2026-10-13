@@ -24,6 +24,8 @@ REFILL_STATUS = {"completed": "completed", "rejected": "rejected"}   # anything 
 
 CATALOG_EVERY_SECONDS = 10 * 60   # the provider's full service list: prices, limits, removed services
 _last_catalog_sync: dict[int, float] = {}
+IMPORT_EVERY_SECONDS = 6 * 3600
+_last_import: dict[int, float] = {}
 
 
 async def sync_orders(client: SMMClient, provider_id: int, user_id: int | None = None) -> int:
@@ -117,6 +119,7 @@ def _truthy(v) -> bool:
 
 
 async def sync_catalog(client: SMMClient, provider_id: int) -> int:
+    """Store the provider's service list. Returns how many services were added, changed or removed."""
     services = await client.services()
     by_sid: dict[int, dict] = {}   # dedupe: ON CONFLICT can't touch the same row twice
     for s in services:
@@ -134,9 +137,10 @@ async def sync_catalog(client: SMMClient, provider_id: int) -> int:
     rows = list(by_sid.values())
     if not rows:
         return 0
-    # one round trip for the whole catalog (thousands of rows)
+    # one round trip for the whole catalog (thousands of rows); only rows that differ are written
     async with transaction() as db:
-        await db.execute("""
+        changed = await db.fetch_val("""
+            with up as (
             insert into provider_services
               (provider_id, provider_service_id, name, category, type, rate,
                min_qty, max_qty, refill, cancel, raw, updated_at)
@@ -150,6 +154,15 @@ async def sync_catalog(client: SMMClient, provider_id: int) -> int:
               rate = excluded.rate, min_qty = excluded.min_qty, max_qty = excluded.max_qty,
               refill = excluded.refill, cancel = excluded.cancel, raw = excluded.raw,
               updated_at = now(), gone_at = null
+            where (provider_services.name, provider_services.category, provider_services.type,
+                   provider_services.rate, provider_services.min_qty, provider_services.max_qty,
+                   provider_services.refill, provider_services.cancel, provider_services.raw)
+                  is distinct from
+                  (excluded.name, excluded.category, excluded.type, excluded.rate, excluded.min_qty,
+                   excluded.max_qty, excluded.refill, excluded.cancel, excluded.raw)
+               or provider_services.gone_at is not null
+            returning 1)
+            select count(*) from up
         """, {"p": provider_id, "rows": json.dumps(rows)})
         # services the provider no longer lists: it answers "Incorrect service ID" to them, so stop selling
         # them (they come back by themselves if it lists them again). Skipped if the list looks cut short.
@@ -163,10 +176,11 @@ async def sync_catalog(client: SMMClient, provider_id: int) -> int:
                 select count(*) from g""", {"p": provider_id, "ids": [r["sid"] for r in rows]})
             if gone:
                 log.warning("provider %s: %d services no longer listed, taken off sale", provider_id, gone)
+                changed += gone
         else:
             log.warning("provider %s: catalog came back short (%d of %d), not marking anything gone",
                         provider_id, len(rows), known)
-    return len(rows)
+    return changed
 
 
 async def flag_stuck_orders() -> None:
@@ -215,16 +229,22 @@ async def run_sync_once() -> None:
             except Exception:
                 log.exception("%s %s failed", p["name"], step.__name__)
         if time.monotonic() - _last_catalog_sync.get(p["id"], -1e9) > CATALOG_EVERY_SECONDS:
+            n = None
             try:
                 n = await sync_catalog(client, p["id"])
                 _last_catalog_sync[p["id"]] = time.monotonic()
-                log.info("%s catalog: %d services", p["name"], n)
+                if n:
+                    log.info("%s catalog: %d services changed", p["name"], n)
             except Exception:
                 log.exception("%s catalog sync failed", p["name"])
-            try:
-                await import_catalog(p["id"])
-            except Exception:
-                log.exception("%s catalog import failed", p["name"])
+            # re-classify only when the list changed (re-reading all of it every 10 min cost egress),
+            # and at least every IMPORT_EVERY_SECONDS in case hand-picked services were edited
+            if n != 0 or time.monotonic() - _last_import.get(p["id"], -1e9) > IMPORT_EVERY_SECONDS:
+                try:
+                    await import_catalog(p["id"])
+                    _last_import[p["id"]] = time.monotonic()
+                except Exception:
+                    log.exception("%s catalog import failed", p["name"])
     try:
         await flag_stuck_orders()
     except Exception:

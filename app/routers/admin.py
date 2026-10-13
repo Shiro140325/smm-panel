@@ -386,8 +386,7 @@ async def set_hidden(service_id: int, body: HiddenIn, db: DB = Depends(get_db, s
                              {"h": body.hidden, "id": service_id})
     if not row:
         raise HTTPException(404, "Service not found")
-    services_router._built.clear()   # customers see the change on their next load
-    services_router._cache.clear()
+    services_router.forget_catalog()   # customers see the change on their next load
     return {"ok": True}
 
 
