@@ -1,4 +1,4 @@
-"""UI checks for the full catalog: category filter, search, capped lists, featured landing table.
+"""UI checks for the full catalog: category filter, full category lists, featured landing table.
 
 Run after tests/e2e.py plus a catalog load (see tests/README.md); expects the app on :8000.
 """
@@ -74,8 +74,11 @@ async def main():
               and await pg.evaluate("document.activeElement.id") == "svc-cat-btn")
         await pg.select_option("#svc-cat", "Followers")
         cnt = await pg.locator("#svc-list .svc-option").count()
-        hint = await pg.inner_text("#order-form .field:nth-of-type(3) .hint")
-        check("list capped at 80 with a hint", cnt == 80 and "Showing 80 of" in hint, (cnt, hint))
+        hint = await pg.inner_text("#svc-hint")
+        label = await pg.eval_on_selector("#svc-cat", "e => e.options[e.selectedIndex].textContent")
+        total = int(label.rsplit("(", 1)[1].rstrip(")").replace(",", ""))
+        check("the whole category is listed, no search box", cnt == total and total > 80 and f"All {total:,} services" in hint
+              and await pg.locator("#svc-search").count() == 0, (cnt, total, hint))
         prices = await pg.eval_on_selector_all(
             "#svc-list .svc-option .p", "els => els.map(e => parseFloat(e.firstChild.textContent.replace(/[₱,]/g, '')))")
         featured_n = int(psql("select count(*) from services where not auto and active and platform='tiktok' and category='Followers'"))
@@ -87,19 +90,9 @@ async def main():
         await pg.click("#svc-list .svc-option:nth-child(12)")
         check("picking a service keeps the list scrolled", await pg.eval_on_selector("#svc-list", "e => e.scrollTop") > 300
               and await pg.eval_on_selector("#svc-list .svc-option:nth-child(12)", "e => e.getAttribute('aria-pressed')") == "true")
-        await pg.evaluate("window.__search = document.getElementById('svc-search')")
-        await pg.type("#svc-search", "brazil", delay=20)
-        await pg.wait_for_timeout(200)
-        check("typing never rebuilds the search box", await pg.evaluate("document.getElementById('svc-search') === window.__search"))
-        names = await pg.eval_on_selector_all("#svc-list .svc-option", "els => els.map(e => e.textContent.toLowerCase())")
-        check("search looks across categories", len(names) > 0 and all("brazil" in t for t in names), names[:5])
-        check("category select disabled while searching", await pg.is_disabled("#svc-cat"))
-        check("search keeps focus", await pg.evaluate("document.activeElement.id") == "svc-search")
 
         sid = psql("select id from services where auto and active and platform='tiktok' and category='Followers' order by id limit 1")
-        await pg.fill("#svc-search", sid)
-        await pg.wait_for_timeout(150)
-        check("search by ID", await pg.locator(f'#svc-list [data-svc="{sid}"]').count() == 1)
+        check("any service in the category can be picked from the list", await pg.locator(f'#svc-list [data-svc="{sid}"]').count() == 1)
         await pg.click(f'#svc-list [data-svc="{sid}"]')
         mn = int(psql(f"select ps.min_qty from services s join provider_services ps using (provider_id, provider_service_id) where s.id={sid}"))
         mx = int(psql(f"select ps.max_qty from services s join provider_services ps using (provider_id, provider_service_id) where s.id={sid}"))

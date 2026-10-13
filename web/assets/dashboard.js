@@ -627,11 +627,10 @@ function categoriesFor(platform) {
 const CATEGORY_LABELS = { [RECOMMENDED]: "Recommended", [PHILIPPINES]: "Philippines", [NON_DROP]: "Non-drop" };
 const categoryLabel = (c) => CATEGORY_LABELS[c] || c;
 
+/** Every service in the picked category (the whole list, cheapest first). */
 function servicesForPlatform() {
-  const q = state.search.trim().toLowerCase();
-  return state.services.filter((s) => s.platform === state.platform && (q
-    ? matches(s, q)   // searching looks across every category
-    : state.category === RECOMMENDED ? s.featured
+  return state.services.filter((s) => s.platform === state.platform && (
+    state.category === RECOMMENDED ? s.featured
       : state.category === PHILIPPINES ? isPH(s)
       : state.category === NON_DROP ? s.non_drop
         : (s.category || "Other") === state.category));
@@ -697,23 +696,11 @@ function svcOptionsHTML(shown) {
       <span class="grow"><span class="t">${esc(s.name)}</span><span class="s"><span class="mono">ID ${s.id}</span>${svcSub(s) ? ` · ${svcSub(s)}` : ""}</span></span>
       ${tierBadge(s.tier)}
       <span class="p">${peso(s.price_per_1k_php)}<span class="muted" style="font-weight:500"> /1K</span></span>
-    </button>`).join("") : `<div class="empty">No services match "${esc(state.search)}".</div>`;
+    </button>`).join("") : `<div class="empty">No services in this category right now.</div>`;
 }
 
-function svcHintText(list, shown) {
-  return list.length > shown.length
-    ? `Showing ${num(shown.length)} of ${num(list.length)}, cheapest first. Search to find the rest.`
-    : state.search.trim() ? `${num(list.length)} match${list.length === 1 ? "" : "es"} across all categories.` : "";
-}
-
-/** Typing in the search box only redraws the list, never the input itself (keeps mobile typing smooth). */
-function renderSvcList() {
-  const list = servicesForPlatform();
-  const shown = list.slice(0, LIST_LIMIT);
-  document.getElementById("svc-list").innerHTML = svcOptionsHTML(shown);
-  document.getElementById("svc-hint").textContent = svcHintText(list, shown);
-  document.getElementById("svc-cat").disabled = !!state.search.trim();
-  catDropdown?.sync();
+function svcHintText(list) {
+  return list.length > 1 ? `All ${num(list.length)} services in this category, cheapest first.` : "";
 }
 
 let catDropdown = null;
@@ -728,7 +715,6 @@ function renderNew() {
   const cats = categoriesFor(state.platform);
   if (!cats.some(([c]) => c === state.category)) state.category = cats[0]?.[0] ?? null;
   const list = servicesForPlatform();
-  const shown = list.slice(0, LIST_LIMIT);
   if (!selectedService() || selectedService().platform !== state.platform) state.serviceId = list[0]?.id ?? null;
   const svc = selectedService();
 
@@ -744,15 +730,14 @@ function renderNew() {
         </div>
         <div class="field">
           <label for="svc-cat">Category</label>
-          <select class="input select" id="svc-cat" ${state.search.trim() ? "disabled" : ""}>
+          <select class="input select" id="svc-cat">
             ${cats.map(([c, n]) => `<option value="${esc(c)}" data-label="${esc(categoryLabel(c))}" data-count="${num(n)}" ${c === state.category ? "selected" : ""}>${esc(categoryLabel(c))} (${num(n)})</option>`).join("")}
           </select>
         </div>
         <div class="field">
-          <label for="svc-search">Service</label>
-          <input class="input" id="svc-search" type="search" placeholder="Search all ${esc(PLATFORMS[state.platform] || "")} services" value="${esc(state.search)}">
-          <div class="svc-list" id="svc-list" role="group" aria-label="Services">${svcOptionsHTML(shown)}</div>
-          <span class="hint" id="svc-hint">${svcHintText(list, shown)}</span>
+          <span class="label" id="svc-label">Service</span>
+          <div class="svc-list" id="svc-list" role="group" aria-labelledby="svc-label">${svcOptionsHTML(list)}</div>
+          <span class="hint" id="svc-hint">${svcHintText(list)}</span>
         </div>
         <div class="field">
           <label for="link">Link</label>
@@ -803,7 +788,7 @@ function renderNew() {
     </div>`;
 
   view.querySelectorAll("[data-platform]").forEach((b) =>
-    b.addEventListener("click", () => { state.platform = b.dataset.platform; state.search = ""; state.category = null; state.serviceId = null; renderNew(); }));
+    b.addEventListener("click", () => { state.platform = b.dataset.platform; state.category = null; state.serviceId = null; renderNew(); }));
   catDropdown = enhanceSelect(document.getElementById("svc-cat"));
   document.getElementById("svc-cat").addEventListener("change", (e) => {
     state.category = e.target.value;
@@ -821,12 +806,6 @@ function renderNew() {
     renderNew();
     document.getElementById("svc-list").scrollTop = listTop;
     window.scrollTo(0, pageY);
-  });
-  let searchTimer;
-  document.getElementById("svc-search").addEventListener("input", (e) => {
-    state.search = e.target.value;
-    clearTimeout(searchTimer);
-    searchTimer = setTimeout(renderSvcList, 120);
   });
   document.getElementById("link").addEventListener("input", (e) => { state.link = e.target.value; updateCharge(); });
   document.getElementById("qty")?.addEventListener("input", (e) => { state.quantity = e.target.value; updateCharge(); });
