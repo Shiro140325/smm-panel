@@ -6,6 +6,7 @@ Every step is idempotent, so overlapping or repeated runs are safe.
 import json
 import logging
 import time
+from datetime import datetime, timedelta
 
 from app import fx
 from app.catalog import import_catalog
@@ -25,7 +26,9 @@ REFILL_STATUS = {"completed": "completed", "rejected": "rejected"}   # anything 
 CATALOG_EVERY_SECONDS = 10 * 60   # the provider's full service list: prices, limits, removed services
 _last_catalog_sync: dict[int, float] = {}
 IMPORT_EVERY_SECONDS = 6 * 3600
-_last_import: dict[int, float] = {}
+IMPORT_OVERLAP = timedelta(minutes=2)   # re-read recent changes too: a slow transaction commits late
+_last_import: dict[int, float] = {}     # when all of the catalog was last imported
+_import_as_of: dict[int, datetime] = {}  # database time of the last import's read
 
 
 async def sync_orders(client: SMMClient, provider_id: int, user_id: int | None = None) -> int:
@@ -237,12 +240,22 @@ async def run_sync_once() -> None:
                     log.info("%s catalog: %d services changed", p["name"], n)
             except Exception:
                 log.exception("%s catalog sync failed", p["name"])
-            # re-classify only when the list changed (re-reading all of it every 10 min cost egress),
-            # and at least every IMPORT_EVERY_SECONDS in case hand-picked services were edited
-            if n != 0 or time.monotonic() - _last_import.get(p["id"], -1e9) > IMPORT_EVERY_SECONDS:
+            # re-classify only what changed (re-reading all of it every 10 min cost egress); all of it
+            # every IMPORT_EVERY_SECONDS, in case hand-picked services were edited
+            full = time.monotonic() - _last_import.get(p["id"], -1e9) > IMPORT_EVERY_SECONDS
+            if n != 0 or full:
+                since = None if full or p["id"] not in _import_as_of else _import_as_of[p["id"]] - IMPORT_OVERLAP
                 try:
-                    await import_catalog(p["id"])
-                    _last_import[p["id"]] = time.monotonic()
+                    try:
+                        res = await import_catalog(p["id"], since=since)
+                    except Exception:
+                        if since is None:
+                            raise
+                        log.exception("%s incremental catalog import failed; importing all of it", p["name"])
+                        since, res = None, await import_catalog(p["id"])
+                    _import_as_of[p["id"]] = res["as_of"]
+                    if since is None:
+                        _last_import[p["id"]] = time.monotonic()
                 except Exception:
                     log.exception("%s catalog import failed", p["name"])
     try:

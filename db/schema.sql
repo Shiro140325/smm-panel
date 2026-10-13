@@ -275,3 +275,22 @@ alter table orders add column if not exists provider_error text;
 
 -- the provider stopped listing this service (it rejects orders for it): not sold while set
 alter table provider_services add column if not exists gone_at timestamptz;
+
+-- when a catalog row last changed (set by trigger on every real change), so the app can download only
+-- what changed instead of the whole catalog
+create or replace function touch_changed_at() returns trigger language plpgsql as $$
+begin
+  if tg_op = 'INSERT' or new is distinct from old then
+    new.changed_at := clock_timestamp();
+  end if;
+  return new;
+end $$;
+alter table services add column if not exists changed_at timestamptz not null default now();
+alter table provider_services add column if not exists changed_at timestamptz not null default now();
+alter table providers add column if not exists changed_at timestamptz not null default now();
+create or replace trigger services_changed_at before insert or update on services
+  for each row execute function touch_changed_at();
+create or replace trigger provider_services_changed_at before insert or update on provider_services
+  for each row execute function touch_changed_at();
+create or replace trigger providers_changed_at before insert or update on providers
+  for each row execute function touch_changed_at();

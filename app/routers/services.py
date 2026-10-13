@@ -6,12 +6,13 @@ import logging
 import os
 import time
 import unicodedata
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, Request, Response
 
 from app.catalog import NON_DROP, NON_DROP_DAYS
 from app.db import DB, get_db, transaction
-from app.pricing import SERVICE_SELECT, price_per_1k_php
+from app.pricing import SERVICE_COLUMNS, SERVICE_FROM, SERVICE_ORDERABLE, SERVICE_SELECT, price_per_1k_php
 
 router = APIRouter(prefix="/services", tags=["services"])
 log = logging.getLogger("services")
@@ -20,17 +21,28 @@ log = logging.getLogger("services")
 # so the finished response is cached: JSON bytes, their gzip, and an ETag, per query shape.
 # After _CACHE_TTL a request still gets the cached copy while a fresh one is built in the
 # background; only a missing (or, with TTL 0 in tests, any) cache entry is built inline.
-# The rows behind every list are fetched once and kept with a fingerprint of the catalog (a 32-byte
-# md5 the database computes), so a rebuild only downloads the catalog again when something in it
-# changed. Pulling it on every rebuild was most of the database's egress.
+# The rows behind every list are kept in memory with a fingerprint of the catalog (a 32-byte md5
+# the database computes). When the fingerprint changes, only the rows changed since the last
+# download are fetched (changed_at, kept by triggers; see db/schema.sql) and merged in; the whole
+# catalog is downloaded only at first, every CATALOG_FULL_EVERY, or if a merge doesn't add up.
+# Pulling the full catalog on every rebuild was most of the database's egress.
 _CACHE_TTL = float(os.environ.get("SERVICES_CACHE_SECONDS", "60"))
 _cache: dict[tuple, tuple] = {}
 _built: dict[tuple, tuple[float, bytes, bytes, str]] = {}
 _refreshing: set[tuple] = set()
-_catalog: tuple[str, list[dict]] | None = None   # (fingerprint, SERVICE_SELECT rows)
-_catalog_checked = 0.0                            # when the fingerprint was last compared
-CATALOG_RECHECK = 5   # seconds: lists rebuilt together (warm_cache) share one fingerprint check
-CATALOG_FINGERPRINT = f"select md5(coalesce(string_agg(x::text, ',' order by x.id), '')) from ({SERVICE_SELECT}) x"
+_catalog: dict | None = None    # fingerprint, as_of (database clock), full_at, rows (by id), list
+_catalog_checked = 0.0          # when the fingerprint was last compared
+CATALOG_RECHECK = 5             # seconds: lists rebuilt together (warm_cache) share one fingerprint check
+CATALOG_FULL_EVERY = 6 * 3600   # seconds: a full download now and then, in case a change slipped past
+CATALOG_OVERLAP = timedelta(minutes=2)   # re-read recent changes too: a slow transaction commits late
+CATALOG_HEAD = f"""
+    select md5(coalesce(string_agg(x::text, ',' order by x.id), '')) as fingerprint, count(*) as n,
+           statement_timestamp() as as_of
+      from ({SERVICE_SELECT}) x"""
+CATALOG_CHANGES = f"""
+    select {SERVICE_COLUMNS}, ({SERVICE_ORDERABLE}) as orderable
+    {SERVICE_FROM}
+     where greatest(s.changed_at, ps.changed_at, p.changed_at) > :since"""
 
 
 def _row(r) -> dict:
@@ -58,15 +70,43 @@ def _row(r) -> dict:
 
 
 async def _catalog_rows(db: DB) -> list[dict]:
-    """Every orderable service (SERVICE_SELECT), downloaded only when its fingerprint changed."""
+    """Every orderable service (SERVICE_SELECT): only what changed is downloaded (see above)."""
     global _catalog, _catalog_checked
     if _catalog is not None and _CACHE_TTL > 0 and time.monotonic() - _catalog_checked < CATALOG_RECHECK:
-        return _catalog[1]
-    fingerprint = await db.fetch_val(CATALOG_FINGERPRINT)
-    if _catalog is None or _catalog[0] != fingerprint:
-        _catalog = (fingerprint, await db.fetch_all(SERVICE_SELECT))
+        return _catalog["list"]
+    head = await db.fetch_one(CATALOG_HEAD)
+    if _catalog is None or _catalog["fingerprint"] != head["fingerprint"]:
+        rows = None
+        if _catalog is not None and time.monotonic() - _catalog["full_at"] < CATALOG_FULL_EVERY:
+            rows = await _merge_changes(db, _catalog)
+            if rows is not None and len(rows) != head["n"]:   # a row deleted outright: start over
+                rows = None
+        full_at = _catalog["full_at"] if rows is not None else time.monotonic()
+        if rows is None:
+            rows = {r["id"]: r for r in await db.fetch_all(SERVICE_SELECT)}
+        _catalog = {"fingerprint": head["fingerprint"], "as_of": head["as_of"], "full_at": full_at,
+                    "rows": rows, "list": sorted(rows.values(), key=lambda r: r["id"])}
+    else:
+        _catalog["as_of"] = head["as_of"]   # still current: the next changes are read from here
     _catalog_checked = time.monotonic()
-    return _catalog[1]
+    return _catalog["list"]
+
+
+async def _merge_changes(db: DB, catalog: dict) -> dict[int, dict] | None:
+    """The cached rows with the changes since the last download applied, or None if they can't be read."""
+    try:
+        async with db.conn.begin_nested():   # a failure (e.g. changed_at not added yet) leaves the request usable
+            changed = await db.fetch_all(CATALOG_CHANGES, {"since": catalog["as_of"] - CATALOG_OVERLAP})
+    except Exception:
+        log.exception("reading catalog changes failed; downloading all of it")
+        return None
+    rows = dict(catalog["rows"])
+    for r in changed:
+        if r.pop("orderable"):
+            rows[r["id"]] = r
+        else:
+            rows.pop(r["id"], None)   # hidden, switched off or no longer listed
+    return rows
 
 
 def forget_catalog():

@@ -241,19 +241,25 @@ def classify(svc: dict):
     }
 
 
-async def import_catalog(provider_id: int) -> dict:
-    """Classify every provider service and upsert the auto rows. Returns counts."""
+async def import_catalog(provider_id: int, since=None) -> dict:
+    """Classify the provider's services and upsert the auto rows. Returns counts, and as_of: the
+    database time the services were read at. With since (a database time), only the services that
+    changed after it are read, and only those can be switched off."""
     async with transaction() as db:
+        as_of = await db.fetch_val("select statement_timestamp()")
         rows = await db.fetch_all("""
             select ps.provider_service_id, ps.name, ps.category, ps.type, ps.rate,
                    ps.max_qty, ps.refill
               from provider_services ps
              where ps.provider_id = :p
+               and (CAST(:since AS timestamptz) is null or ps.changed_at > :since)
                and not exists (select 1 from services s
                                 where s.provider_id = ps.provider_id
                                   and s.provider_service_id = ps.provider_service_id
                                   and not s.auto)
-        """, {"p": provider_id})
+        """, {"p": provider_id, "since": since})
+    if since is not None and not rows:
+        return {"considered": 0, "imported": 0, "added": 0, "updated": 0, "deactivated": 0, "as_of": as_of}
     items = [c for c in (classify(dict(r)) for r in rows) if c]
     async with transaction() as db:
         res = await db.fetch_one("""
@@ -284,13 +290,15 @@ async def import_catalog(provider_id: int) -> dict:
             ), off as (
                 update services s set active = false
                  where s.provider_id = :p and s.auto and s.active
+                   and (CAST(:checked AS bigint[]) is null or s.provider_service_id = ANY(CAST(:checked AS bigint[])))
                    and s.provider_service_id not in (select sid from x)
                 returning 1
             )
             select (select count(*) from up where inserted) as added,
                    (select count(*) from up where not inserted) as updated,
                    (select count(*) from off) as deactivated
-        """, {"p": provider_id, "rows": json.dumps(items)})
+        """, {"p": provider_id, "rows": json.dumps(items),
+              "checked": None if since is None else [r["provider_service_id"] for r in rows]})
     # give hand-picked rows a category too, so they sit in the same filters
     async with transaction() as db:
         for r in await db.fetch_all(
@@ -298,6 +306,6 @@ async def import_catalog(provider_id: int) -> dict:
                 {"p": provider_id}):
             kind = next((label for label, pat in KINDS if re.search(pat, r["name"], re.I)), "Other")
             await db.execute("update services set category = :c where id = :id", {"c": kind, "id": r["id"]})
-    out = {"considered": len(rows), "imported": len(items), **dict(res)}
+    out = {"considered": len(rows), "imported": len(items), **dict(res), "as_of": as_of}
     log.info("catalog import (provider %s): %s", provider_id, out)
     return out
