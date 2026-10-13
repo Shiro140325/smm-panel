@@ -22,7 +22,7 @@ ORDER_STATUS = {
 }
 REFILL_STATUS = {"completed": "completed", "rejected": "rejected"}   # anything else stays pending
 
-CATALOG_EVERY_SECONDS = 6 * 3600
+CATALOG_EVERY_SECONDS = 10 * 60   # the provider's full service list: prices, limits, removed services
 _last_catalog_sync: dict[int, float] = {}
 
 
@@ -149,8 +149,23 @@ async def sync_catalog(client: SMMClient, provider_id: int) -> int:
               name = excluded.name, category = excluded.category, type = excluded.type,
               rate = excluded.rate, min_qty = excluded.min_qty, max_qty = excluded.max_qty,
               refill = excluded.refill, cancel = excluded.cancel, raw = excluded.raw,
-              updated_at = now()
+              updated_at = now(), gone_at = null
         """, {"p": provider_id, "rows": json.dumps(rows)})
+        # services the provider no longer lists: it answers "Incorrect service ID" to them, so stop selling
+        # them (they come back by themselves if it lists them again). Skipped if the list looks cut short.
+        known = await db.fetch_val("select count(*) from provider_services where provider_id = :p and gone_at is null",
+                                   {"p": provider_id})
+        if len(rows) >= 0.5 * known:
+            gone = await db.fetch_val("""
+                with g as (update provider_services set gone_at = now()
+                            where provider_id = :p and gone_at is null
+                              and not (provider_service_id = ANY(CAST(:ids AS bigint[]))) returning 1)
+                select count(*) from g""", {"p": provider_id, "ids": [r["sid"] for r in rows]})
+            if gone:
+                log.warning("provider %s: %d services no longer listed, taken off sale", provider_id, gone)
+        else:
+            log.warning("provider %s: catalog came back short (%d of %d), not marking anything gone",
+                        provider_id, len(rows), known)
     return len(rows)
 
 

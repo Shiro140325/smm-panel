@@ -59,7 +59,7 @@ async def place_order(user_id: int, service_id: int, link: str, quantity: int, c
     async with transaction() as db:
         svc = await db.fetch_one(SERVICE_SELECT + " and s.id = :id", {"id": service_id})
         if not svc:
-            raise HTTPException(404, "Service not found")
+            raise HTTPException(404, "This service isn't available anymore. Please pick another one.")
 
         comments = None
         if _is_custom(svc):
@@ -137,7 +137,7 @@ async def chat_item(db, item_id: int, option: int | None = None) -> dict | None:
     svc = await db.fetch_one("""
         select p.id as provider_id, ps.name as provider_name, ps.min_qty, ps.max_qty, ps.rate, ps.type, p.currency
           from providers p join provider_services ps on ps.provider_id = p.id and ps.provider_service_id = :sid
-         where p.active order by p.id limit 1
+         where p.active and ps.gone_at is null order by p.id limit 1
     """, {"sid": sid})
     if not svc:
         return None

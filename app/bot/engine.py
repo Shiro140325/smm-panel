@@ -108,7 +108,7 @@ async def menu(db) -> list[dict]:
         select m.id, m.name, m.prices, m.options, ps.min_qty as min, ps.max_qty as max,
                lower(coalesce(ps.type, '')) = 'custom comments' as custom
           from bot_menu m
-          join provider_services ps on ps.provider_service_id = m.provider_service_id
+          join provider_services ps on ps.provider_service_id = m.provider_service_id and ps.gone_at is null
           join providers p on p.id = ps.provider_id and p.active
          where m.active
          order by m.sort, m.id

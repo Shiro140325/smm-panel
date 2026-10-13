@@ -14,15 +14,15 @@ async def api(key: str = Form(...), action: str = Form(...), service: int | None
               refills: str | None = Form(None), comments: str | None = Form(None)):
     if key != KEY:
         return {"error": "Invalid API key"}
-    if action == "services":
-        return [
+    if action == "services":   # services listed in STATE["dropped"] were removed by the provider
+        return [x for x in [
             {"service": 1, "name": "TikTok Followers [Bot]", "type": "Default", "category": "TikTok Followers",
              "rate": "0.50", "min": "100", "max": "50000", "refill": False, "cancel": True},
             {"service": 2, "name": "TikTok Followers [HQ] R30", "type": "Default", "category": "TikTok Followers",
              "rate": "1.20", "min": "100", "max": "20000", "refill": True, "cancel": True},
             {"service": 3, "name": "Instagram Comments [Custom]", "type": "Custom Comments", "category": "Instagram Comments",
              "rate": "1.00", "min": "1", "max": "100", "refill": False, "cancel": False},
-        ]
+        ] if x["service"] not in STATE.get("dropped", [])]
     if action == "balance":
         return {"balance": STATE.get("balance", "100.00"), "currency": "USD"}
     if action == "add":
@@ -184,4 +184,10 @@ async def sent(psid: str):
 @app.post("/_funds")
 async def set_funds(broke: bool = Form(...), balance: str = Form("100.00")):
     STATE["broke"], STATE["balance"] = broke, balance
+    return {"ok": True}
+
+
+@app.post("/_drop")
+async def drop(services: str = Form("")):
+    STATE["dropped"] = [int(x) for x in services.split(",") if x]
     return {"ok": True}

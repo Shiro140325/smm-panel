@@ -195,7 +195,7 @@ async def _provider_service(db, psid: int):
         select ps.provider_service_id, ps.name, ps.category, ps.type, ps.rate, ps.min_qty, ps.max_qty, ps.refill, ps.cancel,
                p.currency, p.name as provider
           from provider_services ps join providers p on p.id = ps.provider_id and p.active
-         where ps.provider_service_id = :id order by p.id limit 1""", {"id": psid})
+         where ps.provider_service_id = :id and ps.gone_at is null order by p.id limit 1""", {"id": psid})
 
 
 def _cost_1k(svc) -> float:

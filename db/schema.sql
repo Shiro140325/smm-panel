@@ -272,3 +272,6 @@ create table if not exists bot_panel (
 
 -- why the provider refused an order (shown in the control panel)
 alter table orders add column if not exists provider_error text;
+
+-- the provider stopped listing this service (it rejects orders for it): not sold while set
+alter table provider_services add column if not exists gone_at timestamptz;

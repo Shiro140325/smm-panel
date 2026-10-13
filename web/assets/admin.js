@@ -517,7 +517,7 @@ function renderServices() {
       <td class="mono muted">${s.id}</td>
       <td><div style="font-weight:600">${esc(s.name)} ${tierBadge(s.tier)}</div>
         <div class="hint">${esc(PLATFORMS[s.platform] || s.platform)} · ${esc(s.category || "Other")}${s.auto ? "" : " · Recommended"}</div></td>
-      <td><div class="hint" style="max-width:340px">#${s.provider_service_id} · ${esc(s.provider_name)}</div></td>
+      <td><div class="hint" style="max-width:340px">#${s.provider_service_id} · ${esc(s.provider_name)}</div>${s.gone_at ? `<div class="hint order-why">Removed by SMMGen ${fmtDate(s.gone_at)}: not shown to customers</div>` : ""}</td>
       <td class="num">$${Number(s.rate).toFixed(4)}</td><td class="num">${num(s.orders)}</td>
       <td><button type="button" class="btn btn-ghost btn-sm" data-toggle="${s.id}">${s.hidden ? "Show" : "Hide"}</button></td>
     </tr>`).join("") : `<tr><td colspan="6" class="empty">No services match.</td></tr>`;

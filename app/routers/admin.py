@@ -364,7 +364,7 @@ async def services(q: str | None = None, platform: str | None = None, hidden: bo
         params.update(q=q.strip().lstrip("#"), ql=f"%{q.strip()}%")
     return await db.fetch_all(f"""
         select s.id, s.platform, s.category, s.name, s.tier, s.auto, s.hidden, s.provider_service_id,
-               ps.name as provider_name, ps.rate, ps.min_qty, ps.max_qty, ps.refill, ps.cancel,
+               ps.name as provider_name, ps.rate, ps.min_qty, ps.max_qty, ps.refill, ps.cancel, ps.gone_at,
                (select count(*) from orders o where o.service_id = s.id) as orders
           from services s join provider_services ps
             on ps.provider_id = s.provider_id and ps.provider_service_id = s.provider_service_id

@@ -552,6 +552,31 @@ async def main():
     await ca.post("/admin/api/services/1/hidden", json={"hidden": False})
     check("admin: showing it again", 1 in [x["id"] for x in (await c.get("/services")).json()])
 
+    # SMMGen stops listing a service (it would answer "Incorrect service ID"): off sale until it's listed again
+    from app.workers.sync import sync_catalog
+    from app.providers.smm_client import SMMClient
+    from app.routers.services import warm_cache
+    mk2 = httpx.AsyncClient(base_url=MOCK)
+    mcl = SMMClient(f"{MOCK}/api/v2", os.environ["MOCK_KEY"])
+    svc2 = (await sql("select id from services where provider_service_id = 2"))[0]["id"]
+    await mk2.post("/_drop", data={"services": "2"})
+    await sync_catalog(mcl, 1); await warm_cache()
+    gone_ids = [x["id"] for x in (await c.get("/services")).json()]
+    r = await c.post("/orders", json={"service_id": svc2, "link": "https://tiktok.com/@gone", "quantity": 100})
+    adm_s = (await ca.get("/admin/api/services", params={"q": str(svc2)})).json()
+    check("gone service: SMMGen dropped it → not on sale, can't be ordered, marked in the control panel",
+          svc2 not in gone_ids and r.status_code == 404 and "isn't available" in r.text and adm_s and adm_s[0]["gone_at"],
+          (gone_ids, r.text, adm_s[:1]))
+    await mk2.post("/_drop", data={"services": "1,2,3"})
+    await sync_catalog(mcl, 1)
+    check("gone service: an empty or cut-short list from SMMGen doesn't take everything off sale",
+          (await sql("select count(*) n from provider_services where gone_at is not null"))[0]["n"] == 1)
+    await mk2.post("/_drop", data={"services": ""})
+    await sync_catalog(mcl, 1); await warm_cache()
+    check("gone service: back on sale once SMMGen lists it again", svc2 in [x["id"] for x in (await c.get("/services")).json()]
+          and not (await sql("select gone_at from provider_services where provider_service_id = 2"))[0]["gone_at"])
+    await mk2.aclose()
+
     # --- customer tiers: Member → Pro (₱10k) → Elite (₱25k), website spending after refunds, kept forever
     ct = httpx.AsyncClient(base_url=API)
     tu = (await ct.post("/auth/register", json={"email": "tier@example.com", "password": "password123"})).json()["id"]
