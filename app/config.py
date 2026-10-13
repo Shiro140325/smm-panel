@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     resend_api_url: str = "https://api.resend.com"
     email_from: str = "SMM Shiro <noreply@smmshiro.com>"
     email_reply_to: str = "support@smmshiro.com"
+    owner_email: str = ""             # alerts (e.g. provider balance too low); defaults to the bot panel owner's account
     openrouter_api_key: str = ""      # Messenger bot AI (app/bot); the bot is off while empty
     openrouter_api_url: str = "https://openrouter.ai/api/v1"
     meta_page_token: str = ""         # Facebook Page access token (Messenger Send API)

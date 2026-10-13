@@ -911,6 +911,47 @@ async def main():
     await bm.aclose()
     await bp.aclose()
 
+    # SMMGen balance too low: the order waits as Pending (no rejection, no refund), sending holds,
+    # the owner gets one email, and it all goes out by itself once the balance covers it
+    from app.routers.orders import check_low_funds
+    juan = (await sql("select id from users where email = 'juan@example.com'"))[0]["id"]
+    await sql("insert into ledger (user_id, delta, reason, ref) values (:u, 200, 'adjustment', 'funds test')", {"u": juan})
+    mk = httpx.AsyncClient(base_url=MOCK)
+    await mk.post("/_funds", data={"broke": "true", "balance": "0.01"})
+    n_mail = len((await mk.get("/_emails", params={"to": "owner@example.com"})).json())
+    bal0 = float((await sql("select coalesce(sum(delta), 0) s from ledger where user_id = :u", {"u": juan}))[0]["s"])
+    r1 = await c.post("/orders", json={"service_id": 1, "link": "https://tiktok.com/@funds1", "quantity": 100})
+    r2 = await c.post("/orders", json={"service_id": 1, "link": "https://tiktok.com/@funds2", "quantity": 100})
+    f1, f2 = r1.json().get("id"), r2.json().get("id")
+    fo = await sql("select id, status, provider_error, provider_order_id from orders where id in (:a, :b) order by id", {"a": f1, "b": f2})
+    st_f = (await ca.get("/admin/api/sending")).json()
+    check("low funds: the customer's order is accepted as Pending, not rejected", r1.status_code == 200 and r1.json().get("queued")
+          and fo[0]["status"] == "queued" and "Not enough funds" in (fo[0]["provider_error"] or ""), (r1.text, fo))
+    check("low funds: charged, not refunded; later orders wait behind it", r2.status_code == 200 and fo[1]["status"] == "queued"
+          and fo[1]["provider_error"] is None
+          and float((await sql("select coalesce(sum(delta), 0) s from ledger where user_id = :u", {"u": juan}))[0]["s"]) < bal0, fo)
+    check("low funds: the control panel shows the hold and why", st_f["low_funds"] and "Not enough funds" in st_f["low_funds_reason"]
+          and st_f["queued"] == 2 and not st_f["paused"], st_f)
+    await asyncio.sleep(0.5)
+    mails_f = (await mk.get("/_emails", params={"to": "owner@example.com"})).json()
+    check("low funds: the owner gets one email", len(mails_f) == n_mail + 1 and "too low" in mails_f[-1]["subject"], mails_f[-1:])
+    check("low funds: no resume while the balance is still short", await check_low_funds() is False
+          and (await ca.get("/admin/api/sending")).json()["low_funds"])
+    await mk.post("/_funds", data={"broke": "false", "balance": "50.00"})
+    check("low funds: resumes by itself once the balance covers the next order", await check_low_funds() is True)
+    await asyncio.sleep(3)
+    fo = await sql("select status, provider_order_id from orders where id in (:a, :b) order by id", {"a": f1, "b": f2})
+    st_f = (await ca.get("/admin/api/sending")).json()
+    check("low funds: the waiting orders went to SMMGen, oldest first", all(x["status"] == "pending" and x["provider_order_id"] for x in fo)
+          and fo[0]["provider_order_id"] < fo[1]["provider_order_id"] and not st_f["low_funds"] and st_f["queued"] == 0, (fo, st_f))
+    check("low funds: just one email for the whole hold", len((await mk.get("/_emails", params={"to": "owner@example.com"})).json()) == n_mail + 1)
+    r = await c.post("/orders", json={"service_id": 1, "link": "https://tiktok.com/@reject-me", "quantity": 100})
+    rej = (await sql("select id, status, provider_error from orders where link = 'https://tiktok.com/@reject-me'"))[0]
+    adm_o = (await ca.get("/admin/api/orders", params={"q": str(rej["id"])})).json()
+    check("other rejections still fail and refund, with SMMGen's reason saved", r.status_code == 400 and rej["status"] == "failed"
+          and rej["provider_error"] == "Incorrect link" and adm_o[0]["provider_error"] == "Incorrect link", (r.text, rej, adm_o[:1]))
+    await mk.aclose()
+
     await ca.post("/admin/api/logout")
     r = await ca.get("/admin/api/overview")
     check("admin: logout ends the session", r.status_code == 401, r.text)

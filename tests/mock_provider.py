@@ -24,10 +24,12 @@ async def api(key: str = Form(...), action: str = Form(...), service: int | None
              "rate": "1.00", "min": "1", "max": "100", "refill": False, "cancel": False},
         ]
     if action == "balance":
-        return {"balance": "100.00", "currency": "USD"}
+        return {"balance": STATE.get("balance", "100.00"), "currency": "USD"}
     if action == "add":
         if "reject" in (link or ""):
             return {"error": "Incorrect link"}
+        if STATE.get("broke"):
+            return {"error": "Not enough funds on balance"}
         STATE["next_order"] += 1
         oid = STATE["next_order"]
         STATE["last_add"] = {"service": service, "quantity": quantity, "comments": comments}
@@ -177,3 +179,9 @@ async def me_messages(body: dict, access_token: str = ""):
 @app.get("/_sent")
 async def sent(psid: str):
     return [m for m in SENT if (m.get("recipient") or {}).get("id") == psid and "message" in m]
+
+
+@app.post("/_funds")
+async def set_funds(broke: bool = Form(...), balance: str = Form("100.00")):
+    STATE["broke"], STATE["balance"] = broke, balance
+    return {"ok": True}

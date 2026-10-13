@@ -271,7 +271,7 @@ async def orders(status: str | None = None, q: str | None = None, limit: int = 5
         where.append("(o.id::text = :q or o.provider_order_id::text = :q or u.email ilike :ql or o.link ilike :ql)")
         params.update(q=q.strip().lstrip("#"), ql=f"%{q.strip()}%")
     return await db.fetch_all(f"""
-        select o.id, o.created_at, o.status, o.quantity, o.remains, o.price_php, o.cost, o.link,
+        select o.id, o.created_at, o.status, o.quantity, o.remains, o.price_php, o.cost, o.link, o.provider_error,
                o.provider_order_id, o.cancel_requested_at, u.email, s.name as service_name, s.tier,
                (select pr.status from provider_refills pr where pr.order_id = o.id order by pr.requested_at desc limit 1) as refill_status,
                coalesce((select sum(l.delta) from ledger l where l.reason = 'refund' and l.ref = o.id::text), 0) as refunded_php
@@ -442,6 +442,8 @@ async def set_sending(body: SendingIn):
     """Pause or resume sending orders to the provider. Resuming sends the backlog, one per second."""
     async with transaction() as db:   # saved before the backlog starts, so the sender sees it
         await order_queue.set_paused(db, body.paused)
+        if not body.paused:   # "resume" also retries now after a low funds hold (it holds again if still short)
+            await order_queue.set_low_funds(db, False)
     log.warning("admin %s sending orders to the provider", "paused" if body.paused else "resumed")
     if not body.paused:
         orders_router.kick_queue()

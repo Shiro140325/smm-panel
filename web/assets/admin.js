@@ -297,19 +297,29 @@ async function setupSending() {
   try { st = await call("/admin/api/sending"); } catch (e) { box.innerHTML = `<p class="hint" style="margin:0">${esc(e.message)}</p>`; return; }
   const waiting = st.queued ? `<strong>${num(st.queued)} order${st.queued === 1 ? "" : "s"} waiting</strong> (${peso(st.queued_php)})` : "No orders waiting";
   const secs = st.queued;
-  const text = st.paused
+  const held = st.low_funds && !st.paused;
+  const text = held
+    ? `On hold since ${fmtDate(st.low_funds_since)}: SMMGen said “${esc(st.low_funds_reason)}”. Customers can still order: they're charged and the order waits as Pending. ${waiting}. Top up SMMGen: the site checks every 3 minutes and sends them as soon as the balance covers the next order. Or tap Retry now after topping up.`
+    : st.paused
     ? `Paused since ${fmtDate(st.paused_since)}. Customers can still order: they're charged and the order waits as Pending. ${waiting}. When you resume, they go to SMMGen one per second, oldest first.`
     : st.queued
       ? `Sending the backlog to SMMGen, one per second: ${waiting}, about ${secs < 60 ? `${secs} seconds` : `${Math.ceil(secs / 60)} minutes`} left. New orders join the end of the line.`
       : "On. New orders go to SMMGen right away.";
-  box.classList.toggle("paused", st.paused);
+  box.classList.toggle("paused", st.paused || held);
   box.innerHTML = `
     <div class="sending-head">
       <h3>Sending orders to SMMGen</h3>
-      <span class="badge ${st.paused ? "badge-failed" : st.queued ? "badge-progress" : "badge-completed"}">${st.paused ? "Paused" : st.queued ? "Sending backlog" : "On"}</span>
+      <span class="badge ${st.paused || held ? "badge-failed" : st.queued ? "badge-progress" : "badge-completed"}">${st.paused ? "Paused" : held ? "SMMGen balance too low" : st.queued ? "Sending backlog" : "On"}</span>
     </div>
     <p class="hint" style="margin:0">${text}</p>
-    <div><button type="button" class="btn ${st.paused ? "btn-primary" : "btn-secondary"}" id="send-toggle">${st.paused ? "Resume sending" : "Pause sending"}</button></div>`;
+    <div><button type="button" class="btn ${st.paused ? "btn-primary" : "btn-secondary"}" id="send-toggle">${st.paused ? "Resume sending" : "Pause sending"}</button>
+      ${held ? `<button type="button" class="btn btn-primary" id="send-retry">Retry now</button>` : ""}</div>`;
+  if (held) $("send-retry").onclick = async () => {
+    $("send-retry").disabled = true;
+    try { await call("/admin/api/sending", { method: "POST", body: { paused: false } }); toast("Retrying: if SMMGen still says the balance is too low, it holds again"); }
+    catch (e) { toast(e.message, { bad: true }); }
+    setTimeout(setupSending, 1500);
+  };
   const btn = $("send-toggle");
   btn.onclick = async () => {
     const ask = st.paused ? `Tap again: send ${st.queued ? `${num(st.queued)} waiting order${st.queued === 1 ? "" : "s"} and ` : ""}resume` : "Tap again: pause sending";
@@ -321,7 +331,7 @@ async function setupSending() {
     } catch (e) { toast(e.message, { bad: true }); }
     setupSending();
   };
-  if (!st.paused && st.queued) sendingTimer = setTimeout(() => { if ($("sending")) setupSending(); }, 2000);   // live countdown
+  if (!st.paused && !held && st.queued) sendingTimer = setTimeout(() => { if ($("sending")) setupSending(); }, 2000);   // live countdown
 }
 
 async function setupAnnouncement() {
@@ -380,7 +390,7 @@ function renderOrders() {
       <td data-col="qty" class="num">${num(o.quantity)}</td>
       <td data-col="remains" class="num">${o.remains == null ? "–" : num(o.remains)}</td>
       <td data-col="charge" class="num">${peso(o.price_php)}</td>
-      <td data-col="status">${badge(ORDER_STATUS, o.status)}</td>
+      <td data-col="status">${badge(ORDER_STATUS, o.status)}${o.provider_error ? `<div class="hint order-why" title="${esc(o.provider_error)}">SMMGen: ${esc(o.provider_error)}</div>` : ""}</td>
       <td data-col="refill">${o.status === "needs_review"
         ? `<button type="button" class="btn btn-sm order-cancel" data-refund="${o.id}">Refund ${peso(o.price_php)}</button>`
         : o.refill_status === "pending" ? `<span class="muted">Refill in progress</span>`

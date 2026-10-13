@@ -32,6 +32,10 @@ async def sync_loop(interval: int):
             await run_sync_once()
         except Exception:
             log.exception("sync run failed")
+        try:
+            await orders.check_low_funds()   # provider balance topped up? lift the low funds hold
+        except Exception:
+            log.exception("low funds check failed")
         orders.kick_queue()   # resume sending a backlog after a restart (no-op while paused or empty)
         try:
             await messenger.catch_up()   # answer Messenger chats a restart left waiting

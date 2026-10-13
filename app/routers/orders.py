@@ -111,6 +111,8 @@ async def place_order(user_id: int, service_id: int, link: str, quantity: int, c
 
     # 2) place upstream — outside the transaction
     outcome, err = await _submit(order["id"])
+    if outcome == "queued":   # the provider balance ran low: it waits as Pending and goes out after a top-up
+        return {**result, "queued": True}
     if outcome == "failed":
         raise HTTPException(400, f"Order rejected by provider: {err}")
     if outcome == "needs_review":
@@ -189,6 +191,8 @@ async def place_chat_order(user_id: int, item_id: int, link: str, quantity: int,
         kick_queue()
         return {**result, "queued": True}
     outcome, err = await _submit(order["id"])
+    if outcome == "queued":
+        return {**result, "queued": True}
     if outcome == "failed":
         raise HTTPException(400, f"Order rejected: {err}")
     if outcome == "needs_review":
@@ -294,13 +298,27 @@ async def _submit(order_id: int) -> tuple[str, str | None]:
         extra = {"comments": o["comments"]} if o["comments"] else {}
         provider_order_id = await client.add(o["provider_service_id"], o["link"], o["quantity"], **extra)
     except ProviderError as e:
-        # provider rejected it: mark failed and refund in full
+        reason = str(e)[:500]
+        if order_queue.is_funds_error(reason):
+            # our balance at the provider ran out: keep the order (Pending for the customer), hold sending
+            # until the balance covers it again (check_low_funds), and tell the owner once
+            async with transaction() as db:
+                await db.execute("update orders set status = 'queued', provider_error = :e, updated_at = now() where id = :id",
+                                 {"e": reason, "id": o["id"]})
+                started = await order_queue.set_low_funds(db, True, reason)
+            log.warning("order %s held: provider balance too low (%s)", o["id"], reason)
+            if started:
+                asyncio.get_running_loop().create_task(_alert_low_funds(o["id"], reason))
+            return "queued", reason
+        # provider rejected it: mark failed (with its reason) and refund in full
         async with transaction() as db:
             await _fail_and_refund(db, o["id"], o["user_id"], float(o["price_php"]))
+            await db.execute("update orders set provider_error = :e where id = :id", {"e": reason, "id": o["id"]})
             if o["source"] == "trial":   # the trial wasn't delivered: give it back
                 await db.execute("update users set trial_used_at = null, trial_device = null, trial_ip = null where id = :u",
                                  {"u": o["user_id"]})
-        return "failed", str(e)
+        log.info("order %s rejected by the provider: %s", o["id"], reason)
+        return "failed", reason
     except Exception:
         # network error/timeout: we can't know whether it was placed — never auto-refund
         log.exception("provider add failed for order %s", o["id"])
@@ -328,7 +346,7 @@ async def drain_queue() -> int:
     async with _drain_lock:
         while True:
             async with transaction() as db:
-                if await order_queue.is_paused(db):
+                if await order_queue.is_held(db):
                     break
                 oid = await db.fetch_val("""
                     update orders set status = 'creating', updated_at = now()
@@ -345,6 +363,59 @@ async def drain_queue() -> int:
             sent += 1
             await asyncio.sleep(QUEUE_GAP_SECONDS)
     return sent
+
+
+async def _alert_low_funds(order_id: int, reason: str) -> None:
+    """Email the owner that orders are on hold until the provider balance is topped up."""
+    from app import mailer
+    from app.config import get_settings
+    try:
+        async with transaction() as db:
+            to = get_settings().owner_email or await db.fetch_val(
+                "select u.email from bot_panel b join users u on u.id = b.owner_user_id where b.id = 1")
+            st = await order_queue.state(db)
+        if not to or not mailer.enabled():
+            log.warning("low funds: no owner email to alert")
+            return
+        text = (f"SMMGen refused order #{order_id}: {reason}\n\n"
+                f"Orders are on hold and waiting as Pending ({st['queued']} so far, ₱{st['queued_php']:,.2f}). "
+                "Customers aren't refunded or rejected.\n\n"
+                "Top up SMMGen. Within a few minutes of the balance covering the next order, they're sent "
+                "automatically, oldest first.")
+        html = "".join(f"<p>{line}</p>" for line in text.split("\n\n"))
+        await mailer.send(to, "SMMGen balance is too low: orders are on hold", html, text)
+    except Exception:
+        log.exception("low funds alert failed")
+
+
+async def check_low_funds() -> bool:
+    """While on a low funds hold: if the provider balance now covers the oldest waiting order, lift the
+    hold and send the backlog. Returns True if it resumed."""
+    async with transaction() as db:
+        if not await order_queue.low_funds(db):
+            return False
+        o = await db.fetch_one("""
+            select o.provider_id, o.quantity, ps.rate from orders o
+              join services s on s.id = o.service_id
+              left join provider_services ps on ps.provider_id = o.provider_id and ps.provider_service_id = s.provider_service_id
+             where o.status = 'queued' order by o.id limit 1""")
+        if not o:   # nothing waiting (all canceled): no reason to hold
+            await order_queue.set_low_funds(db, False)
+            return True
+        provider = await db.fetch_one("select * from providers where id = :p", {"p": o["provider_id"]})
+    try:
+        bal = float((await SMMClient.for_provider(provider).balance()).get("balance") or 0)
+    except Exception as e:
+        log.warning("low funds: couldn't read the provider balance: %s", e)
+        return False
+    need = float(o["rate"] or 0) * o["quantity"] / 1000
+    if bal < need:
+        return False
+    async with transaction() as db:
+        await order_queue.set_low_funds(db, False)
+    log.warning("provider balance %.2f covers the next order (%.4f): sending resumed", bal, need)
+    kick_queue()
+    return True
 
 
 def kick_queue() -> None:

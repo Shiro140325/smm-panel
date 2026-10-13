@@ -269,3 +269,6 @@ create table if not exists bot_panel (
   owner_user_id bigint references users(id),
   session_epoch integer not null default 1     -- bump to log every device out
 );
+
+-- why the provider refused an order (shown in the control panel)
+alter table orders add column if not exists provider_error text;
