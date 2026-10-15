@@ -1,13 +1,44 @@
 """In-memory sliding-window limits (one app instance): failed logins, sign-ups, API calls."""
+import ipaddress
+import os
 import time
 
 from fastapi import HTTPException, Request
 
+# Proxies that append to X-Forwarded-For in front of this app: Render, then the
+# combined service's nginx. Everything before what Render saw can be made up.
+PROXY_HOPS = int(os.environ.get("PROXY_HOPS", "2"))
+
+# https://www.cloudflare.com/ips/ (changes rarely)
+_CLOUDFLARE = [ipaddress.ip_network(n) for n in (
+    "173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+    "141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+    "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
+    "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+    "2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32",
+    "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32",
+)]
+
+
+def _is_cloudflare(addr: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    return any(ip in net for net in _CLOUDFLARE)
+
 
 def client_ip(request: Request) -> str:
-    # behind Cloudflare/Render the client address arrives in a header
-    return (request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for", "").split(",")[0]
-            or (request.client.host if request.client else "?")).strip()
+    """The visitor's address. What Render saw is trusted; Cloudflare's CF-Connecting-IP only
+    when Render saw a Cloudflare address (someone reaching the origin directly can't fake it)."""
+    hops = [h.strip() for h in request.headers.get("x-forwarded-for", "").split(",") if h.strip()]
+    if len(hops) >= PROXY_HOPS:
+        seen = hops[-PROXY_HOPS]
+    else:
+        seen = hops[0] if hops else (request.client.host if request.client else "?")
+    if _is_cloudflare(seen):
+        return (request.headers.get("cf-connecting-ip") or seen).strip()
+    return seen
 
 
 class Limiter:
